@@ -1,0 +1,11 @@
+# Normalise to LF in the repository regardless of the checkout platform.
+#
+# This project is developed on Windows but the source is plain ASCII/UTF-8 with
+# no platform-sensitive line endings, and several modules deliberately contain
+# control characters written as \uXXXX escapes (see the README gotcha about
+# boundaryKey and OutlineBuilder). Letting core.autocrlf rewrite line endings
+# per-platform would make every file show as wholly modified on a fresh clone.
+* text=auto eol=lf
+
+# Generated, and large. Not worth diffing.
+pnpm-lock.yaml -diff linguist-generated

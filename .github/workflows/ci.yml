@@ -1,0 +1,141 @@
+name: CI
+
+# Pushes and pull requests use Linux only. Manual runs add Windows and macOS;
+# use the full matrix before a release.
+#
+# Linux is not just the cheap default here — it is the only platform that can
+# run the symlink-escape case in paths.test.ts, which an ordinary Windows
+# session cannot create. The path jail is unproven on the development machine
+# and proven here.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The embedding model is ~130MB and downloads from HuggingFace on first use.
+  # Pinning the location lets actions/cache carry it between runs; the test
+  # suite reads this variable (src/tools/tools.test.ts).
+  DOCUMENT_INDEX_MODEL_CACHE: ${{ github.workspace }}/.ci-models
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Types
+        run: pnpm exec tsc -p tsconfig.json --noEmit
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        node-version: ["22", "24"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+
+      # Keyed on the model name rather than the lockfile: the download is the
+      # same 130MB whatever else changes, and re-fetching it on every
+      # dependency bump would dominate the run.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
+          key: bge-small-en-v1.5-${{ runner.os }}
+
+      # better-sqlite3's install script is blocked in pnpm-workspace.yaml, so
+      # this proves the shipped prebuilt binary loads on a platform that is not
+      # the development machine. If it ever does not, that is the failure worth
+      # catching, not a node-gyp fallback quietly papering over it.
+      - run: pnpm install --frozen-lockfile
+      - name: Native modules load
+        run: node -e "require('better-sqlite3'); require('sqlite-vec'); console.log('ok')"
+
+      # Never piped. A `| tail` once masked a failing test in this project.
+      - name: Tests
+        run: pnpm test
+
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm pack
+
+      # The published archive is runtime output, the README and the licence.
+      # Tests, fixtures and TypeScript sources have no business in it, and the
+      # `files` allowlist in package.json is what keeps them out.
+      - name: No sources or tests escaped into the archive
+        run: |
+          contents=$(tar -tzf document-index-mcp-*.tgz)
+          echo "$contents"
+          if echo "$contents" | grep -E '\.test\.js|/testing/|\.ts$' | grep -v '\.d\.ts$'; then
+            echo "::error::tests or TypeScript sources leaked into the package"
+            exit 1
+          fi
+          for required in package/dist/index.js package/README.md package/LICENSE; do
+            echo "$contents" | grep -qx "$required" || {
+              echo "::error::$required missing from the package"
+              exit 1
+            }
+          done
+
+      # A packed archive that cannot start is a release that cannot be
+      # installed. This is the check the release plan asks for: prove it works
+      # outside the development checkout.
+      - name: Install from the archive and start against a scratch library
+        run: |
+          mkdir -p /tmp/scratch-install /tmp/scratch-library
+          cd /tmp/scratch-install
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/document-index-mcp-*.tgz
+          node -e "
+            const { spawn } = require('node:child_process');
+            const p = spawn(process.execPath,
+              ['node_modules/document-index-mcp/dist/index.js', '--library=/tmp/scratch-library'],
+              { stdio: ['pipe', 'pipe', 'inherit'] });
+            const req = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+              protocolVersion: '2025-06-18', capabilities: {},
+              clientInfo: { name: 'ci', version: '0' } } };
+            p.stdin.write(JSON.stringify(req) + '\n');
+            let buf = '';
+            p.stdout.on('data', (d) => {
+              buf += d;
+              if (!buf.includes('\n')) return;
+              const reply = JSON.parse(buf.split('\n')[0]);
+              if (reply.result?.serverInfo?.name !== 'document-index-mcp') {
+                console.error('unexpected server identity', reply);
+                process.exit(1);
+              }
+              console.log('server started and identified itself correctly');
+              p.stdin.end();
+              process.exit(0);
+            });
+            setTimeout(() => { console.error('server did not answer initialize'); process.exit(1); }, 60000);
+          "

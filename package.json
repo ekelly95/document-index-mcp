@@ -1,0 +1,85 @@
+{
+  "name": "document-index-mcp",
+  "version": "0.1.0",
+  "description": "Indexes documents on your computer so AI agents can retrieve only the relevant, source-located passages.",
+  "license": "MIT",
+  "author": "ekelly95",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ekelly95/document-index-mcp.git"
+  },
+  "homepage": "https://github.com/ekelly95/document-index-mcp#readme",
+  "bugs": "https://github.com/ekelly95/document-index-mcp/issues",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "search",
+    "retrieval",
+    "sqlite",
+    "full-text-search",
+    "embeddings",
+    "pdf",
+    "ocr",
+    "docx",
+    "markdown",
+    "local-first"
+  ],
+  "//private": "Distribution is by cloning this repository, not npm — see the README's install section. `private` is the guard that makes an accidental `npm publish` fail rather than claim the name. `npm pack` still works, so CI's install-outside-the-checkout job does not need this removed. Drop it if the package is ever genuinely published.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "bin": {
+    "document-index-mcp": "dist/index.js"
+  },
+  "//files": "Runtime output only. Tests compile into dist/ because `pnpm test` runs them from there, so they are excluded by negation rather than by a separate build config.",
+  "files": [
+    "dist",
+    "!dist/**/*.test.js",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.test.js.map",
+    "!dist/testing",
+    "!dist/eval",
+    "README.md",
+    "LICENSE"
+  ],
+  "//clean": "tsc never deletes the .js belonging to a source file you removed, and the test script globs dist/. A deleted parser's tests therefore keep running, forever, against a build no source can reproduce — which is exactly what happened when EPUB and PPTX came out: six deleted test files kept passing and then failing from stale output. So every build wipes dist first. Inlined via node's own fs rather than adding a rimraf dependency; it is cross-platform either way.",
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "pnpm clean && tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "ingest": "node dist/cli/ingest.js",
+    "eval": "node dist/eval/run.js",
+    "test": "pnpm build && node --test \"dist/**/*.test.js\"",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "@napi-rs/canvas": "^1.0.3",
+    "async-mutex": "^0.5.0",
+    "better-sqlite3": "^13.0.3",
+    "fastembed": "^2.1.0",
+    "fflate": "^0.8.3",
+    "linkedom": "^0.18.13",
+    "mdast-util-to-string": "^4.0.0",
+    "pdfjs-dist": "^6.2.108",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "sqlite-vec": "^0.1.9",
+    "tesseract.js": "^7.0.0",
+    "ulid": "^2.3.0",
+    "unified": "^11.0.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^22.9.0",
+    "typescript": "^5.6.3"
+  }
+}

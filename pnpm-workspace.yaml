@@ -1,0 +1,16 @@
+# pnpm 10+ blocks postinstall scripts by default, and this file — not the
+# `pnpm.onlyBuiltDependencies` field in package.json, which is silently
+# ignored — is where the allowlist lives.
+#
+# better-sqlite3 is deliberately FALSE. Its install script runs
+# `prebuild-install || node-gyp rebuild`; the prebuild fetch fails for this
+# Node ABI and it falls back to node-gyp, which needs Visual Studio. The
+# package already ships a usable prebuilt binary, so skipping the script
+# entirely is what actually works on this machine.
+# tesseract.js is FALSE because its only install script is
+# opencollective-postinstall — a donation banner, not a build step. The
+# package is pure JS + prebuilt WASM and works without running anything.
+allowBuilds:
+  better-sqlite3: false
+  onnxruntime-node: true
+  tesseract.js: false

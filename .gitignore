@@ -1,0 +1,32 @@
+# Build output — regenerate with `pnpm build`
+dist/
+*.tsbuildinfo
+
+# Dependencies — pnpm-lock.yaml IS tracked, deliberately.
+node_modules/
+
+# The index and the embedding model cache. Both are rebuildable from the
+# source library, and both are far too large to track.
+data/
+.models/
+*.db
+*.db-wal
+*.db-shm
+*.db.lock
+
+# The embedding model, when CI caches it into the workspace.
+.ci-models/
+
+# npm pack output; the CI pack job builds one on every run.
+*.tgz
+
+# A recorded evaluation run is one machine on one day. The question set at
+# eval/questions.json IS tracked — it is the ground truth.
+eval/results/
+
+# The stress corpus is 175MB of downloadable binaries kept outside the repo,
+# so nothing here is normally in the way. This is the guard for the day someone
+# unpacks it into corpus/ instead: corpus/manifest.json IS tracked, and it is
+# the only part that should ever be.
+corpus/docs/
+corpus/decks/

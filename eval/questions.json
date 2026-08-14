@@ -1,0 +1,582 @@
+{
+  "corpus": "document-index-corpus (10 open-access documents)",
+  "notes": "Questions are written against passages read out of the index, then phrased in words the passage does not use wherever the subject allows it. That is the weakness to keep in mind when reading a score: the questions were written after seeing the answers, so this measures ranking, not discovery. Anchors are verbatim fragments of the answering chunk; resolution happens at run time, so a re-ingest that changes chunking reports unresolvable questions rather than silently scoring them as misses. The five questions that targeted EPUB and PowerPoint documents were removed on 2026-08-13 with those readers; scores from before that date were measured over 56 questions and 14 documents and are NOT comparable to these. The corpus lost three novels, one of them Spanish against an English-only embedding model, so the remaining set is easier as well as smaller.",
+  "questions": [
+    {
+      "id": "q001",
+      "question": "Which subscription tiers include single sign-on?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "SSO Integration"
+        }
+      ],
+      "note": "The release plan names SSO vs single sign-on as a known hybrid weakness. The table says SSO; the question says single sign-on."
+    },
+    {
+      "id": "q002",
+      "question": "What does the professional plan cost in storage compared to the free one?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "File Storage"
+        }
+      ],
+      "note": "Pro vs professional, the second synonym case from the release plan."
+    },
+    {
+      "id": "q003",
+      "question": "Which plan gets someone assigned to look after the account?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "Dedicated Manager"
+        }
+      ]
+    },
+    {
+      "id": "q004",
+      "question": "What were the earnings after costs for the final quarter of the year?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "Gross Profit"
+        }
+      ]
+    },
+    {
+      "id": "q005",
+      "question": "How much did takings grow compared with the year before?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "YoY Growth"
+        }
+      ]
+    },
+    {
+      "id": "q006",
+      "question": "Who works in sales and where are they based?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "Account Executive"
+        }
+      ]
+    },
+    {
+      "id": "q007",
+      "question": "Which staff member joined earliest?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "Employee Directory"
+        }
+      ]
+    },
+    {
+      "id": "q008",
+      "question": "Which HTTP verbs can be repeated safely without changing the result again?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Idempotent"
+        }
+      ]
+    },
+    {
+      "id": "q009",
+      "question": "How do you fetch only the headers of a resource?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Retrieve headers only"
+        }
+      ]
+    },
+    {
+      "id": "q010",
+      "question": "Which body issues the money used in Australia?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Reserve Bank of Australia"
+        }
+      ],
+      "note": "money denominations vs currency, the third synonym case named in the release plan."
+    },
+    {
+      "id": "q011",
+      "question": "What is the British unit of money called and what symbol is used for it?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Pound Sterling"
+        }
+      ]
+    },
+    {
+      "id": "q012",
+      "question": "Which nation has the most inhabitants?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Countries by Population"
+        }
+      ]
+    },
+    {
+      "id": "q013",
+      "question": "Which database is recommended for analytics that run inside the application process?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "In-process OLAP"
+        }
+      ]
+    },
+    {
+      "id": "q014",
+      "question": "Which datastore suits searching through log files?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Full-text search, log analysis"
+        }
+      ]
+    },
+    {
+      "id": "q015",
+      "question": "Which database is in the public domain?",
+      "type": "identifier",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Database Systems"
+        }
+      ]
+    },
+    {
+      "id": "q016",
+      "question": "What is the keyboard shortcut for reformatting a whole file on Windows?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Format Document"
+        }
+      ]
+    },
+    {
+      "id": "q017",
+      "question": "How do you place several typing cursors at once?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Multi-Cursor"
+        }
+      ]
+    },
+    {
+      "id": "q018",
+      "question": "How many colours does a coordinated visual scheme define?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "12 theme colors"
+        }
+      ]
+    },
+    {
+      "id": "q019",
+      "question": "Why would you choose a converter that maps styles to meaning rather than to appearance?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "prioritize semantic conversion"
+        }
+      ]
+    },
+    {
+      "id": "q020",
+      "question": "Which project is behind schedule and who is running it?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "API Migration"
+        }
+      ]
+    },
+    {
+      "id": "q021",
+      "question": "What sections does this reference document contain?",
+      "type": "navigational",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Table of Contents"
+        }
+      ]
+    },
+    {
+      "id": "q022",
+      "question": "What personal details does the form ask for at the start?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/docx-content-controls.docx",
+          "anchor": "Personal Information"
+        }
+      ]
+    },
+    {
+      "id": "q023",
+      "question": "What identifier format is used for staff records on the form?",
+      "type": "identifier",
+      "accept": [
+        {
+          "source_path": "docs/docx-content-controls.docx",
+          "anchor": "EMP-00000"
+        }
+      ]
+    },
+    {
+      "id": "q024",
+      "question": "Does the form distinguish working from home from working in an office?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-content-controls.docx",
+          "anchor": "Work Location"
+        }
+      ]
+    },
+    {
+      "id": "q025",
+      "question": "What proportion of users said they struggled to find their way around the site?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-tracked-changes.docx",
+          "anchor": "find the navigation confusing"
+        }
+      ]
+    },
+    {
+      "id": "q026",
+      "question": "How much worse has the site got for people on phones?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-tracked-changes.docx",
+          "anchor": "mobile bounce rates"
+        }
+      ]
+    },
+    {
+      "id": "q027",
+      "question": "When was the existing site first launched?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/docx-tracked-changes.docx",
+          "anchor": "launched in 2019"
+        }
+      ]
+    },
+    {
+      "id": "q028",
+      "question": "How does the decoding half of the model differ from the encoding half?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "the decoder inserts a third sub-layer"
+        }
+      ]
+    },
+    {
+      "id": "q029",
+      "question": "What stops the model from looking ahead at words it has not produced yet?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "prevent positions from attending to subsequent positions"
+        }
+      ]
+    },
+    {
+      "id": "q030",
+      "question": "Why were sine waves chosen to encode word order rather than learned vectors?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "geometric progression"
+        }
+      ]
+    },
+    {
+      "id": "q031",
+      "question": "What happened to translation quality when the number of attention heads was changed?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "Variations on the Transformer architecture"
+        }
+      ]
+    },
+    {
+      "id": "q032",
+      "question": "Under what terms may the figures in this paper be reproduced?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "hereby grants permission to reproduce"
+        }
+      ]
+    },
+    {
+      "id": "q033",
+      "question": "What problem does reformulating layers as residual functions solve?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/resnet-cvpr-twocolumn.pdf",
+          "anchor": "residual learning framework to ease the training"
+        }
+      ]
+    },
+    {
+      "id": "q034",
+      "question": "Did simply stacking more layers without shortcuts help or hurt accuracy?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/resnet-cvpr-twocolumn.pdf",
+          "anchor": "higher validation error than the shallower"
+        }
+      ]
+    },
+    {
+      "id": "q035",
+      "question": "How many pictures were used to train the models?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/resnet-cvpr-twocolumn.pdf",
+          "anchor": "1.28 million training images"
+        }
+      ]
+    },
+    {
+      "id": "q036",
+      "question": "How deep was the network compared with VGG?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/resnet-cvpr-twocolumn.pdf",
+          "anchor": "deeper than VGG nets"
+        }
+      ]
+    },
+    {
+      "id": "q037",
+      "question": "Which member of the Hamburg group was a German national?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/911-commission-report.pdf",
+          "anchor": "the only German cit"
+        }
+      ]
+    },
+    {
+      "id": "q038",
+      "question": "How quickly did Pakistan agree to American demands after the attacks?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/911-commission-report.pdf",
+          "anchor": "agreed to every U.S. request"
+        }
+      ]
+    },
+    {
+      "id": "q039",
+      "question": "Who criticised the hard line taken towards Sudan?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/911-commission-report.pdf",
+          "anchor": "Ambassador Carney"
+        }
+      ]
+    },
+    {
+      "id": "q040",
+      "question": "Where can a printed copy of this report be bought?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/911-commission-report.pdf",
+          "anchor": "Superintendent of Documents"
+        }
+      ]
+    },
+    {
+      "id": "q041",
+      "question": "How old were the patients in the dysplasia group on average?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/plos-one.pdf",
+          "anchor": "median age was 73 years"
+        }
+      ]
+    },
+    {
+      "id": "q042",
+      "question": "Why might samples from the same disease group not look alike molecularly?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/plos-one.pdf",
+          "anchor": "heterogeneity of this group"
+        }
+      ]
+    },
+    {
+      "id": "q043",
+      "question": "Which institutions did the authors of the colitis study work for?",
+      "type": "prose",
+      "accept": [
+        {
+          "source_path": "docs/plos-one.pdf",
+          "anchor": "Centre for Genomics and Child Health"
+        }
+      ]
+    },
+    {
+      "id": "q049",
+      "question": "What is in the third volume of this history?",
+      "type": "navigational",
+      "accept": [
+        {
+          "source_path": "docs/scanned-book.pdf",
+          "anchor": "CONTENTS OF VOLUME III"
+        }
+      ]
+    },
+    {
+      "id": "q050",
+      "question": "Which documents in this library describe tables of data?",
+      "type": "ambiguous",
+      "accept": [
+        {
+          "source_path": "docs/docx-tables.docx",
+          "anchor": "Financial Summary"
+        },
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Simple Data Table"
+        }
+      ],
+      "note": "Two documents can both legitimately answer this. Either counts."
+    },
+    {
+      "id": "q051",
+      "question": "What does this library say about SQL databases?",
+      "type": "ambiguous",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Database Systems"
+        },
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Relational"
+        }
+      ]
+    },
+    {
+      "id": "q052",
+      "question": "attention is all you need",
+      "type": "navigational",
+      "accept": [
+        {
+          "source_path": "docs/attention-tables.pdf",
+          "anchor": "Attention Is All You Need"
+        }
+      ],
+      "note": "A bare title as a query. Lexical should win this outright; if hybrid does not, fusion is diluting a case it should be strongest on."
+    },
+    {
+      "id": "q053",
+      "question": "ImageNet 2012 classification dataset 1000 classes",
+      "type": "identifier",
+      "accept": [
+        {
+          "source_path": "docs/resnet-cvpr-twocolumn.pdf",
+          "anchor": "ImageNet 2012 classification dataset"
+        }
+      ],
+      "note": "Quoted-phrase shaped. The lexical path must survive whatever weighting the fusion ends up with."
+    },
+    {
+      "id": "q054",
+      "question": "miR-200",
+      "type": "identifier",
+      "accept": [
+        {
+          "source_path": "docs/plos-one.pdf",
+          "anchor": "The miR-200 family"
+        }
+      ],
+      "note": "A short identifier with a hyphen and a digit — the shape that breaks naive FTS query construction."
+    },
+    {
+      "id": "q055",
+      "question": "What is the largest economy by gross domestic product?",
+      "type": "paraphrase",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "GDP ($B)"
+        }
+      ]
+    },
+    {
+      "id": "q056",
+      "question": "Which encodings use a variable number of bytes per character?",
+      "type": "table",
+      "accept": [
+        {
+          "source_path": "docs/docx-headings-toc.docx",
+          "anchor": "Bytes per Character"
+        }
+      ]
+    }
+  ]
+}

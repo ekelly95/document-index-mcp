@@ -1,0 +1,164 @@
+{
+  "name": "document-index-corpus",
+  "purpose": "A structural stress-test corpus. Every document was chosen because it breaks a different assumption in the ingest pipeline, not for its subject matter. FINDINGS.md in the corpus folder records what it caught.",
+  "why_this_file_exists": "The corpus is 175MB of binaries and stays out of git. Without this manifest the folder is unrecoverable and every measurement in FINDINGS.md becomes unreproducible. Checksums are the authority: a re-downloaded file that matches sha256 is the file the findings were measured against, whatever the URL did in the meantime.",
+  "licensing": "Everything here is open access, public domain, or a licensed sample. Nothing was taken from behind a paywall. pml-book-frontmatter is CC-BY-NC-ND, the tightest term in the set - fine as a local fixture, not redistributable.",
+  "verify": "node scripts/corpus.mjs verify --dir=<corpus>/docs",
+  "documents": [
+    {
+      "file": "resnet-cvpr-twocolumn.pdf",
+      "bytes": 819383,
+      "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
+      "source": "arXiv 1512.03385, Deep Residual Learning for Image Recognition",
+      "url": "https://arxiv.org/pdf/1512.03385",
+      "licence": "arXiv non-exclusive licence",
+      "tests": "Two-column reading order; the arXiv margin stamp that once outranked the paper title"
+    },
+    {
+      "file": "attention-tables.pdf",
+      "bytes": 2215244,
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "source": "arXiv 1706.03762, Attention Is All You Need",
+      "url": "https://arxiv.org/pdf/1706.03762",
+      "licence": "arXiv non-exclusive licence",
+      "tests": "Tables in a single-column paper; figure captions as headings; the Google permission notice on page 1 read as a heading"
+    },
+    {
+      "file": "plos-one.pdf",
+      "bytes": 1346981,
+      "sha256": "a52c79a866ec9cbe26a6fd2a2113f5e6dc048a93e259f2c72108a55986b34b3b",
+      "source": "PLOS ONE, The miR-200 family is increased in dysplastic lesions in ulcerative colitis patients",
+      "url": "https://doi.org/10.1371/journal.pone.0173664",
+      "url_evidence": "DOI read out of the PDF's own XMP metadata",
+      "licence": "CC-BY",
+      "tests": "Open-access journal furniture - sidebars, abbreviation footnotes, a two-line title"
+    },
+    {
+      "file": "911-commission-report.pdf",
+      "bytes": 2475163,
+      "sha256": "657d41475eb3a9a5e3e87a6c7c51ac1dfbe1af7566d1abff7bf7286e7e1c0e1b",
+      "source": "The 9/11 Commission Report, US Government Publishing Office",
+      "url": null,
+      "url_note": "The PDF carries no readable identifier - its Info dictionary is compressed. Search govinfo.gov for the GPO edition and verify by sha256 before trusting a replacement.",
+      "licence": "Public domain (US Government work)",
+      "tests": "585 pages; 22 top-level embedded bookmarks composed with font-size tiers; the placeholder title 'Title (201-635.job)'"
+    },
+    {
+      "file": "pml-book-frontmatter.pdf",
+      "bytes": 92323940,
+      "sha256": "89749245bc8065d7575f990815c621a091de3facca1585168fc0369542742dcf",
+      "source": "Probabilistic Machine Learning, probml.github.io",
+      "url": null,
+      "url_note": "LaTeX-produced, no embedded identifier. The book is author-distributed free from probml.github.io; confirm the edition by sha256, since the author revises it.",
+      "licence": "CC-BY-NC-ND",
+      "tests": "860 pages with genuine roman-numeral page labels - the printed-page citation guarantee"
+    },
+    {
+      "file": "scanned-book.pdf",
+      "bytes": 18728103,
+      "sha256": "35c9b9f7fc9bc2f71af6e34526339aca9a6f86a5685b7e684345881488f6fcea",
+      "source": "A history of the mental growth of mankind in ancient times (Hittell), Internet Archive",
+      "url": "https://archive.org/details/historyofmentalg03hitt",
+      "url_evidence": "Identifier read out of the PDF's own metadata (Creator: Digitized by the Internet Archive)",
+      "licence": "Public domain",
+      "tests": "A 408-page scan carrying an OCR text layer, so it takes the fast path rather than the OCR one - and its near-continuum of font sizes made almost every line a heading"
+    },
+    {
+      "file": "docx-headings-toc.docx",
+      "bytes": 67970,
+      "sha256": "94d1e6bc3fcef399e69d49543fcabbf62ee9dad4873c1c0958a5d46cdf6654ea",
+      "source": "sample-files.com",
+      "url": null,
+      "url_note": "Sample file; verify by sha256.",
+      "licence": "Licensed sample",
+      "tests": "Word with actual heading styles and a generated contents page - 109 correctly nested outline nodes"
+    },
+    {
+      "file": "docx-content-controls.docx",
+      "bytes": 38293,
+      "sha256": "1c675c67c6664e250b4b21a59a7b73f090d6d4e4626f151c55adbada9d79c6b1",
+      "source": "sample-files.com",
+      "url": null,
+      "url_note": "Sample file; verify by sha256.",
+      "licence": "Licensed sample",
+      "tests": "Content controls / form fields, which wrap paragraphs in w:sdt"
+    },
+    {
+      "file": "docx-tracked-changes.docx",
+      "bytes": 39134,
+      "sha256": "56d880c6099dbf982d8a4ad1da71e482440171cb8a456a804bfa3c0010001076",
+      "source": "sample-files.com",
+      "url": null,
+      "url_note": "Sample file; verify by sha256.",
+      "licence": "Licensed sample",
+      "tests": "Insertions, deletions and reviewer comments - deleted strings must never reach the index"
+    },
+    {
+      "file": "docx-tables.docx",
+      "bytes": 39301,
+      "sha256": "f11873de3cb3f1f2424806b21aab6e6c95e5a54bf05875a62fd7ac0420d33189",
+      "source": "sample-files.com",
+      "url": null,
+      "url_note": "Sample file; verify by sha256.",
+      "licence": "Licensed sample",
+      "tests": "Merged cells and nested tables through gfmTable"
+    }
+  ],
+  "decks_purpose": "Formats no parser reads. These test scripts/convert-for-ingest.ps1 -- what survives the round trip into a PDF plus a speaker-notes file -- rather than any parser. Licences here include NC and ND terms: fine as local fixtures, not redistributable.",
+  "decks": [
+    {
+      "file": "dobih-survey-report.pptx",
+      "bytes": 919872,
+      "sha256": "11b06c4283dc28869aacb00ed32887e632dfc39918c1c256c9093e7c003ba5b4",
+      "source": "Database of British and Irish Hills user survey 2018, from the DoBIH v18.4 source-file mirror",
+      "url": "https://archive.org/details/civgraph-dobih-v18-4-source-files",
+      "licence": "CC BY 4.0",
+      "tests": "51 slides of which 30 are chart-led, plus 3 tables and no speaker notes: the deck genre the removed PPTX reader indexed as titles only. Converted, its chart categories, counts and percentages all come back as text"
+    },
+    {
+      "file": "gemstones-large.ppt",
+      "bytes": 10618368,
+      "sha256": "673c6e3395e343a3e47e91148112e8329730fd43ecf479d76c3d7535374bb824",
+      "source": "Gemstones, a school presentation",
+      "url": "https://archive.org/details/gemstones_515",
+      "licence": "CC0 1.0",
+      "tests": "10MB legacy .ppt that is mostly photographs: tests the .ppt route and a deck whose bulk is imagery. Its slide titles are padded with spaces, which is what exposed the uncollapsed bookmark whitespace"
+    },
+    {
+      "file": "portuguese-law.pptx",
+      "bytes": 43654,
+      "sha256": "6c26201d1103f51066011bd07cf89c92e5ce9d9c70714d5f06496a3ed2b5bd96",
+      "source": "Elementos do processo",
+      "url": "https://archive.org/details/elementos-do-processo",
+      "licence": "CC BY-NC-SA 4.0",
+      "tests": "Tiny 3-slide deck in Portuguese with a real embedded title, so it proves the placeholder rule does not over-reject a non-English one"
+    },
+    {
+      "file": "spanish-history.pptx",
+      "bytes": 32183,
+      "sha256": "348679aeda0d5cfd70cc7b63ccff887743feb178eea8c42b010c8561fcc1e579",
+      "source": "El primer militarismo y la confederacion Peru-Boliviana",
+      "url": "https://archive.org/details/el-primer-militarismo-y-la-confederacion-peru-boliviana-autoguardado",
+      "licence": "CC0 1.0",
+      "tests": "One slide, and the Spanish placeholder title Presentacion de PowerPoint that the English-only rule used to accept"
+    },
+    {
+      "file": "spanish-tech-large.pptx",
+      "bytes": 12044333,
+      "sha256": "fe59ee7022a601b2b821c3889b5331623fd44ffa37af614c47bb412f9f5e4802",
+      "source": "Contenido U2 - Elementos Tecnologicos",
+      "url": "https://archive.org/details/contenido-u-2",
+      "licence": "CC BY-NC-ND 4.0",
+      "tests": "12MB image-heavy Spanish deck, second instance of the localised placeholder title"
+    },
+    {
+      "file": "warwick-conference.pptx",
+      "bytes": 2841096,
+      "sha256": "ca849ccc269301b62101a124ea358abe627e0415ab3f453d40222a10cce9c662",
+      "source": "ESPg RC Warwick 2025 conference slides",
+      "url": "https://archive.org/details/espg-rc-warwick-2025",
+      "licence": "CC BY-ND 4.0",
+      "tests": "Modern conference deck with no embedded title at all, so the filename fallback is what must carry it"
+    }
+  ]
+}
