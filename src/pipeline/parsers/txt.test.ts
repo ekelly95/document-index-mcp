@@ -16,14 +16,14 @@ import type { DocBlock } from "../ir.js";
 
 const parser = new TxtParser();
 
-async function parse(text: string, name = "C:\\lib\\notes.txt"): Promise<DocBlock[]> {
+async function parse(text: string, name = "/lib/notes.txt"): Promise<DocBlock[]> {
   const src = sourceFromBytes(name, new TextEncoder().encode(text));
   const blocks: DocBlock[] = [];
   for await (const b of parser.parse(src)) blocks.push(b);
   return blocks;
 }
 
-const meta = (text: string, name = "C:\\lib\\notes.txt") =>
+const meta = (text: string, name = "/lib/notes.txt") =>
   parser.metadata(sourceFromBytes(name, new TextEncoder().encode(text)));
 
 test("setext underlines are headings, at the level the underline character sets", () => {
@@ -138,7 +138,7 @@ test("the section trail nests and unwinds with heading level", async () => {
 
 test("the title is the first heading, else the filename", async () => {
   assert.equal((await meta("READING NOTES\n\nBody.\n")).title, "READING NOTES");
-  assert.equal((await meta("Just prose.\n", "C:\\lib\\my-file.txt")).title, "my-file");
+  assert.equal((await meta("Just prose.\n", "/lib/my-file.txt")).title, "my-file");
 });
 
 test("an unstructured file is flat, and that is a correct answer", async () => {

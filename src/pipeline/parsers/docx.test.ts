@@ -7,7 +7,7 @@ import { sourceFromBytes } from "../source.js";
 import { UnsupportedFormatError, type DocBlock, type DocumentSource } from "../ir.js";
 
 const open = (spec: DocxFixtureSpec, name = "paper.docx"): DocumentSource =>
-  sourceFromBytes(`C:\\lib\\${name}`, buildDocx(spec));
+  sourceFromBytes(`/lib/${name}`, buildDocx(spec));
 
 const collect = async (src: DocumentSource): Promise<DocBlock[]> => {
   const out: DocBlock[] = [];

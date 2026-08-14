@@ -21,14 +21,14 @@ import type { DocBlock } from "../ir.js";
 
 const parser = new MarkdownParser();
 
-async function parse(md: string, name = "C:\\lib\\note.md"): Promise<DocBlock[]> {
+async function parse(md: string, name = "/lib/note.md"): Promise<DocBlock[]> {
   const src = sourceFromBytes(name, new TextEncoder().encode(md));
   const blocks: DocBlock[] = [];
   for await (const b of parser.parse(src)) blocks.push(b);
   return blocks;
 }
 
-const meta = (md: string, name = "C:\\lib\\note.md") =>
+const meta = (md: string, name = "/lib/note.md") =>
   parser.metadata(sourceFromBytes(name, new TextEncoder().encode(md)));
 
 test("block text is sliced from the source, not re-serialised", async () => {
@@ -148,11 +148,11 @@ test("frontmatter is skipped as content but read for the title", async () => {
 
 test("the title falls back to the first H1, then to the filename", async () => {
   assert.equal((await meta("# The Real Title\n\nBody.\n")).title, "The Real Title");
-  assert.equal((await meta("Just prose, no heading.\n", "C:\\lib\\my-note.md")).title, "my-note");
+  assert.equal((await meta("Just prose, no heading.\n", "/lib/my-note.md")).title, "my-note");
 
   // An empty frontmatter title and a bare `# ` are both absent, not empty.
   assert.equal((await meta('---\ntitle: ""\n---\n\n# Fallback\n')).title, "Fallback");
-  assert.equal((await meta("# \n\nBody.\n", "C:\\lib\\bare.md")).title, "bare");
+  assert.equal((await meta("# \n\nBody.\n", "/lib/bare.md")).title, "bare");
 });
 
 test("a hash inside a fenced block is not counted as a heading", async () => {

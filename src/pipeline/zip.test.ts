@@ -177,11 +177,11 @@ test("an EPUB is still sniffed from the fixed offset, without unzipping", () => 
     "mimetypeapplication/epub+zip",
     "the mimetype entry is not at the fixed offset",
   );
-  assert.equal(sniffFormat(sourceFromBytes("C:\\lib\\book.epub", epub)), "epub");
+  assert.equal(sniffFormat(sourceFromBytes("/lib/book.epub", epub)), "epub");
 });
 
 test("a recognised EPUB is refused by name, not as unidentifiable binary", async () => {
-  const src = sourceFromBytes("C:\\lib\\book.epub", epubShapedZip());
+  const src = sourceFromBytes("/lib/book.epub", epubShapedZip());
   await assert.rejects(() => routeDocument(src), /EPUB is not read/);
 });
 
@@ -192,7 +192,7 @@ test("a recognised PPTX is refused by name, not as unidentifiable binary", async
       "ppt/presentation.xml": strToU8("<p:presentation/>"),
     }),
   );
-  const src = sourceFromBytes("C:\\lib\\deck.pptx", pptx);
+  const src = sourceFromBytes("/lib/deck.pptx", pptx);
   assert.equal(sniffFormat(src), "pptx");
   await assert.rejects(() => routeDocument(src), /Slide decks are not read/);
 });

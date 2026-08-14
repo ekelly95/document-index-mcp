@@ -70,16 +70,38 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     );
   }
 
-  const libraryRoot = path.resolve(raw);
+  const requestedRoot = path.resolve(raw);
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(libraryRoot);
+    stat = fs.statSync(requestedRoot);
   } catch {
-    throw new Error(`Library path does not exist: ${libraryRoot}`);
+    throw new Error(`Library path does not exist: ${requestedRoot}`);
   }
   if (!stat.isDirectory()) {
-    throw new Error(`Library path is not a directory: ${libraryRoot}`);
+    throw new Error(`Library path is not a directory: ${requestedRoot}`);
   }
+
+  /*
+   * Canonical from here on, and that is load-bearing rather than tidy.
+   *
+   * `assertRealPathInside` returns a file's realpath, and `beginIngest` then
+   * asks `libraryRelative` for that file's path relative to this root. If the
+   * root still holds a symlink or a short name while the file has been
+   * resolved, the two are in different spellings of the same place and
+   * `path.relative` between them climbs out and back: `source_path` becomes
+   * something like `../../private/var/.../note.md` instead of `note.md`. One
+   * file then fails to match itself on re-ingest, so an edited document is
+   * never superseded and a library path can hold two rows.
+   *
+   * Not hypothetical, and not visible on Linux, which is why it survived: it
+   * needs a root that is not already canonical. macOS `/tmp` is `/private/tmp`
+   * and its `os.tmpdir()` sits under `/var` -> `/private/var`; Windows hands
+   * out 8.3 names like `RUNNER~1`. CI found it on both the first time it ran,
+   * while Linux passed, because `/tmp` there is real.
+   *
+   * Resolving once, here, is what keeps every later comparison in one spelling.
+   */
+  const libraryRoot = fs.realpathSync(requestedRoot);
 
   const dbPath = path.resolve(
     flags.get("db") ??

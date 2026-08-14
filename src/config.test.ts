@@ -18,18 +18,54 @@ test("OCR defaults: auto, English, the documented worker count", () => {
 
 test("the renamed environment and derived paths are the defaults", () => {
   const lib = tempLibrary();
+  // Cleared for the duration, because this test is about what the DEFAULTS
+  // are: any of these set in the surrounding environment is the setting under
+  // test being overridden by the machine. CI sets DOCUMENT_INDEX_MODEL_CACHE
+  // for every job so the 130MB model can be cached between runs, which made
+  // this fail there and only there.
+  const borrowed = ["DOCUMENT_INDEX_DB_PATH", "DOCUMENT_INDEX_MODEL_CACHE"].map(
+    (name) => [name, process.env[name]] as const,
+  );
+  for (const [name] of borrowed) delete process.env[name];
   process.env["DOCUMENT_INDEX_LIBRARY_PATH"] = lib;
+
   try {
     const config = loadConfig([]);
-    assert.equal(config.libraryRoot, path.resolve(lib));
-    assert.equal(
-      config.dbPath,
-      path.resolve(lib, ".document-index", "document-index.db"),
-    );
-    assert.equal(config.modelCacheDir, path.resolve(lib, ".document-index", "models"));
+    // realpath, not resolve: the root is canonicalised, and macOS hands out a
+    // temp directory under /var, which is a symlink to /private/var.
+    const root = fs.realpathSync(path.resolve(lib));
+    assert.equal(config.libraryRoot, root);
+    assert.equal(config.dbPath, path.join(root, ".document-index", "document-index.db"));
+    assert.equal(config.modelCacheDir, path.join(root, ".document-index", "models"));
   } finally {
     delete process.env["DOCUMENT_INDEX_LIBRARY_PATH"];
+    for (const [name, value] of borrowed) if (value !== undefined) process.env[name] = value;
   }
+});
+
+test("a library root reached through a symlink is canonicalised", (t) => {
+  // The regression test for the defect CI found on macOS and Windows. If the
+  // root keeps the symlink while a file's path is resolved, `libraryRelative`
+  // compares two spellings of the same place and every source_path comes back
+  // climbing out of the library.
+  const real = tempLibrary();
+  const link = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "document-index-mcp-link-")), "via");
+  try {
+    fs.symlinkSync(real, link, "dir");
+  } catch {
+    // Windows refuses this without Developer Mode or an elevated shell, the
+    // same limit paths.test.ts records. The 8.3 half of the bug is covered
+    // there in CI regardless.
+    t.skip("cannot create a symlink here");
+    return;
+  }
+
+  const config = loadConfig([`--library=${link}`]);
+  assert.equal(config.libraryRoot, fs.realpathSync(real));
+  assert.ok(
+    !config.libraryRoot.includes("via"),
+    `the symlink survived into the root: ${config.libraryRoot}`,
+  );
 });
 
 test("OCR flags are honoured", () => {
