@@ -14,8 +14,34 @@ This project has no bug bounty. The maintainer aims to reply within two weeks.
 This is a local MCP server that talks over stdio. It has no network listener, no
 account, no hosted API, no database server, and no application secret. It reads
 files beneath one directory the user chooses, and writes one SQLite index inside
-it. The only outbound request it ever makes is downloading the embedding model
-on first run.
+it.
+
+It makes exactly two kinds of outbound request, both one-time downloads of its
+own machinery. Neither carries any part of a user's documents, and no document
+content leaves the machine except to the MCP client the user connected:
+
+- the embedding model, ~130 MB from
+  `storage.googleapis.com/qdrant-fastembed`, on first ingest;
+- OCR language data, ~3 MB per language from `cdn.jsdelivr.net`, on the first
+  scanned PDF only. `--ocr-lang-path` points this at a local directory instead
+  and removes the request.
+
+Two supply-chain facts about the first of those, stated here rather than left to
+be discovered:
+
+- **The model is downloaded over HTTPS with no integrity check** — no checksum,
+  no signature. A compromised bucket or a broken TLS path would be trusted. This
+  is recorded in `docs/roadmap.md` and is the honest limit of the model
+  pipeline.
+- **The archive is unpacked by `tar`, and that dependency is pinned deliberately.**
+  `fastembed` asks for a `tar` 6 line that is end-of-life with a critical
+  advisory against it, so `pnpm-workspace.yaml` overrides it to `tar` 7 and
+  patches the one import that would otherwise break. This protects the supported
+  install — cloning this repository and running `pnpm install`. It does **not**
+  travel inside the archive attached to a release: `npm install`ing that tarball
+  resolves `fastembed`'s own dependency range and gets the unpatched `tar`.
+  Distribution here is by cloning, not by the tarball, which is the only reason
+  that is acceptable.
 
 The documents are untrusted. A PDF, a Word file or a Markdown note may have come
 from anywhere, and the parsers are the attack surface. The server therefore:

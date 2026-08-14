@@ -101,9 +101,13 @@ DOCUMENT_INDEX_LIBRARY_PATH = '/absolute/path/to/your/library'
 
 ### First run
 
-The first ingest downloads the embedding model (`bge-small-en-v1.5`, ~130 MB) into
-`<library>/.document-index/models`. That is the only outbound network call the server ever makes;
-searching is entirely local.
+The first ingest downloads the embedding model (`bge-small-en-v1.5`, ~130 MB) from
+`storage.googleapis.com/qdrant-fastembed` into `<library>/.document-index/models`, once. Searching
+is entirely local.
+
+That is one of exactly two outbound requests the server can make. The other is the first *scanned*
+PDF, which fetches about 3 MB of OCR language data from `cdn.jsdelivr.net`. Both are cached and
+neither repeats. See [Privacy](#privacy) for how to avoid the second one.
 
 For a whole library at once, use the bulk CLI rather than ingesting file by file in chat:
 
@@ -140,6 +144,10 @@ through in-process OCR (tesseract.js, WASM, nothing to install). The decision is
 a scanned book's digitally typeset title page keeps its real text and only the scanned pages pay for
 recognition.
 
+Nothing to install, but not nothing to fetch: the first scanned page downloads about 3 MB of language
+data from a CDN and caches it under `<library>/.document-index/models/tesseract/`. Point
+`--ocr-lang-path` at your own copy to skip that — see [Privacy](#privacy).
+
 It is slow and visibly so: roughly 1–5 seconds per page per worker, so a 400-page scan is tens of
 minutes. `get_document_outline` reports `chunk_count` rising against `locator_count` throughout.
 
@@ -148,6 +156,7 @@ minutes. `get_document_outline` reports `chunk_count` rising against `locator_co
 | `--ocr=auto\|off` | `DOCUMENT_INDEX_OCR` | `auto` |
 | `--ocr-lang=` | `DOCUMENT_INDEX_OCR_LANG` | `eng` |
 | `--ocr-workers=` | `DOCUMENT_INDEX_OCR_WORKERS` | `2` |
+| `--ocr-lang-path=` | `DOCUMENT_INDEX_OCR_LANG_PATH` | the CDN |
 
 The embedding model is English-only, so a multilingual library retrieves poorly. See
 [docs/roadmap.md](docs/roadmap.md).
@@ -177,8 +186,9 @@ schema for a search hit has no text field at all, so a refactor cannot quietly r
 
 ### With YouTube Transcript Notes
 
-The companion project captures a YouTube video as faithful, timestamped Markdown. Ingest that
-Markdown here and the whole chain stays checkable:
+[YouTube Transcript Notes](https://github.com/ekelly95/youtube-transcript-notes) captures a YouTube
+video as faithful, timestamped Markdown. Ingest that Markdown here and the whole chain stays
+checkable:
 
 ```text
 YouTube video
@@ -197,7 +207,17 @@ final synthesis can be traced back to the second of video it came from.
 - Documents are read from your disk and indexed into one SQLite file under your library root.
 - Search, ranking and passage retrieval are entirely local. No document text is sent anywhere except
   to the AI client you deliberately connected.
-- The only outbound request the server ever makes is downloading the embedding model on first run.
+- The server makes exactly two kinds of outbound request, both one-time downloads of its own
+  machinery, and neither carries any part of your documents:
+  - the embedding model (~130 MB) from `storage.googleapis.com/qdrant-fastembed`, on first ingest;
+  - OCR language data (~3 MB per language) from `cdn.jsdelivr.net`, on the first *scanned* PDF only.
+    A library with no scans never makes this one.
+
+  Both are cached and neither repeats. `--ocr-lang-path=<dir>` points OCR at your own copy of the
+  language data instead, which removes the second entirely — the files come from
+  [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast). There is currently no equivalent
+  for the embedding model; it is downloaded without an integrity check, which is recorded in
+  [docs/roadmap.md](docs/roadmap.md).
 - The library root is a jail. Paths outside it are refused, symlinks that escape it are refused, and
   the extension allowlist keeps files like `.env` from being addressable at all.
 - Search results expose a library-relative path, never an absolute one.

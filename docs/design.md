@@ -52,5 +52,13 @@ what was specified, it is deliberate, and the reason is here.
 | PDF outline from bookmarks *or* synthetic font-size heuristics | Both, composed | Bookmarks are authoritative but resolve only to a page, so they cannot see a subsection starting halfway down one. A bookmark re-bases the section trail; detected headings extend it. Front matter, which sits before the first bookmark, still gets a path from its headings. |
 | Tables indivisible | Tables and code get their own chunk | Indivisible is weaker than isolated. Merged into a mixed chunk a table's `kind` degrades to `"text"`, so `filter.kind` matches nothing and the embedding is diluted by adjacent prose. Measured: isolating them moved the correct hit from #2 to #1 on the fixture corpus. |
 | 512-token chunk ceiling | 400 | fastembed pads every input to `maxLength`, so this is a cost lever. Measured on this machine: 512 → ~140s to embed a 400-page book, 400 → ~105s, 256 → ~64s. |
-| "No outbound network calls remain anywhere" | True at query time only | `fastembed` depends directly on `@huggingface/hub` and downloads ~130MB on first run. |
+| "No outbound network calls remain anywhere" | True at query time only | Two one-time downloads survive at ingest time: `fastembed` fetches ~130MB from `storage.googleapis.com/qdrant-fastembed` on first run, and tesseract.js fetches ~3MB of language data from jsDelivr on the first scanned PDF (`--ocr-lang-path` removes that one). Neither carries document text. `fastembed` does depend on `@huggingface/hub`, but only for sparse embeddings, which this build never calls — the model does not come from HuggingFace, and saying it did was wrong in four documents until a pre-release review. |
 | `schema.sql` | `src/db/schema.ts` | `tsc` does not copy `.sql` into `dist/`, which would need a build step or runtime path resolution that differs between `pnpm start` and `node dist/index.js`. |
+
+A note on the `obsidian-mcp` references, which appear in that table and in about
+six source comments: it is an earlier MCP server by the same author, not
+published, so there is nothing to link to. The comments are kept anyway. They
+name where a piece of code was proven rather than who wrote it, and the
+reasoning they carry — particularly why `paths.ts` compares with
+`path.relative` instead of `startsWith` — is worth more than the broken
+reference costs.

@@ -7,11 +7,11 @@ name: Release
 # guards protecting the artefact are repeated here rather than assumed to have
 # run — a tag can point at a commit that never reached main.
 #
-# One job rather than two. ytn splits build from publish because PyPI trusted
-# publishing makes `id-token: write` itself the credential, and that has to be
-# quarantined. Nothing here is published to a registry; the only extra privilege
-# is `contents: write` to create the release, so splitting would buy nothing and
-# cost two more actions to keep pinned.
+# One job rather than two. A sibling project splits build from publish because
+# PyPI trusted publishing makes `id-token: write` itself the credential, and
+# that has to be quarantined. Nothing here is published to a registry; the only
+# extra privilege is `contents: write` to create the release, so splitting would
+# buy nothing and cost two more actions to keep pinned.
 on:
   push:
     tags: ["v*"]
@@ -31,7 +31,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"

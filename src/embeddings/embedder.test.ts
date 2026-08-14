@@ -4,8 +4,8 @@ import type { FlagEmbedding } from "fastembed";
 import { composeEmbedInput, Embedder, type InitEmbedding } from "./embedder.js";
 
 /**
- * The first run downloads ~130MB from HuggingFace, so init is the one call in
- * this module that routinely fails for reasons that pass. These tests use the
+ * The first run downloads ~130MB from Google Cloud Storage, so init is the one
+ * call in this module that routinely fails for reasons that pass. These tests use the
  * injected init seam rather than the network, which is the whole point: a test
  * that a failed download can be retried must not need a download.
  */
@@ -25,7 +25,7 @@ test("a failed init is not cached, so the next call can retry", async () => {
   let attempts = 0;
   const flaky: InitEmbedding = async () => {
     attempts++;
-    if (attempts === 1) throw new Error("getaddrinfo ENOTFOUND huggingface.co");
+    if (attempts === 1) throw new Error("getaddrinfo ENOTFOUND storage.googleapis.com");
     return stubModel();
   };
 

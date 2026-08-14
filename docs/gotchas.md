@@ -32,16 +32,18 @@ because each one is a trap that a reasonable change would walk straight back int
   leg's candidates are filtered during hydration. `search_document` names any document still
   indexing in its response, because otherwise "no matches" is indistinguishable from "the
   library does not cover this" — the same failure the PDF probe refuses to create at ingest.
-- **Never write a control character as a literal byte — use the `\uXXXX` escape.** Several key
-  separators here are control characters on purpose (`boundaryKey` joins with `\u0001`/`\u0000`,
-  `OutlineBuilder` with `\u0000`) because a heading can never contain one, so two different
-  trails can never collide into the same key. Written as raw bytes, though, a single NUL makes
-  every binary-sniffing tool treat the whole file as binary: `git diff` stops showing it,
-  ripgrep skips it, and repomix drops it from a pack **silently**. That is not hypothetical —
-  `chunker.ts`, `outline.ts` and `pdfFast.ts` were invisible in a review pack for exactly this
-  reason, and the reviewer had to work from their tests. The escapes compile to identical
-  strings. A one-liner to check: scan `src/**/*.ts` for bytes below `0x20` other than tab, LF
-  and CR.
+- **Never write a control character as a literal byte — use the `\uXXXX` escape.** Two separators
+  here are control characters on purpose — `pdfFast.ts` joins a bookmark trail with `\u0000`, and
+  `ocrPool.ts` builds its OCR pool key the same way — because a heading or a path can never
+  contain one, so two different trails can never collide into the same key. Written as raw bytes,
+  though, a single NUL makes every binary-sniffing tool treat the whole file as binary: `git diff`
+  stops showing it, ripgrep skips it, and repomix drops it from a pack **silently**. That is not
+  hypothetical, and it has now happened twice — `chunker.ts`, `outline.ts` and `pdfFast.ts` were
+  invisible in a review pack for exactly this reason, and the reviewer had to work from their
+  tests; later `ocrPool.ts` did it again on its own, and shipped that way until a pre-release
+  review caught it. The escapes compile to identical strings. This is no longer advice you have to
+  remember: `src/sources.test.ts` scans `src/**/*.ts` and `scripts/**/*.mjs` for bytes below `0x20`
+  other than tab, LF and CR, and names the file, line and column of anything it finds.
 - **vec0 rejects plain JS numbers as primary keys.** better-sqlite3 binds them as SQLite REAL; sqlite-vec
   needs a true INTEGER and fails with `Only integers are allows for primary key values`. Every rowid
   crossing into `vec_chunks` goes through `vecRowid()`, which returns a `BigInt`.
@@ -116,6 +118,7 @@ a scan without bookmarks legitimately has a flat outline.
 | `--ocr=auto\|off` | `DOCUMENT_INDEX_OCR` | `auto` | `off` restores the loud refusal |
 | `--ocr-lang=` | `DOCUMENT_INDEX_OCR_LANG` | `eng` | Tesseract language(s), e.g. `deu+eng` |
 | `--ocr-workers=` | `DOCUMENT_INDEX_OCR_WORKERS` | `2` | Pages recognised concurrently |
+| `--ocr-lang-path=` | `DOCUMENT_INDEX_OCR_LANG_PATH` | the CDN | Local traineddata directory |
 
 Worth knowing before the first scan goes in:
 
@@ -125,8 +128,17 @@ Worth knowing before the first scan goes in:
   throughput lever; each worker holds a WASM heap of 150–300MB once pages are in flight, which is why
   the default is 2.
 - **First use downloads ~3MB per language** (`eng.traineddata` from jsDelivr) into
-  `<models>/tesseract/`, next to the embedding model, and never again. Drop a `.traineddata` file
-  there yourself for a fully offline machine.
+  `<models>/tesseract/`, next to the embedding model, and never again. This is the second of the
+  server's two outbound requests, and the one most easily forgotten — the README and `SECURITY.md`
+  both claimed for a while that the embedding model was the only one.
+- **`--ocr-lang-path` avoids that download**, for an offline machine or a pinned copy. Two things
+  decide whether it works. It is consulted **only on a cache miss**, so once `<models>/tesseract/`
+  holds the file the flag does nothing and looks broken. And the filename must match what is there:
+  tesseract.js asks for `<lang>.traineddata.gz` or `<lang>.traineddata` depending on its `gzip`
+  option, and it does not sniff. The npm `@tesseract.js-data` packages ship the gzipped form;
+  everything under `tesseract-ocr/tessdata_fast` and `tessdata_best` is plain. `buildScheduler`
+  looks in the directory and sets `gzip` accordingly, so either layout works — but only one form
+  per directory, and with `deu+eng` every language must use the same form.
 - **A shutdown mid-OCR abandons the run** after the 10s drain; the lease expires, the next start
   marks it failed, and re-ingesting starts the OCR over. Nothing already `ready` is affected.
 - **Mojibake books are OCR'd wholesale.** A wrong-encoding text layer looks printable page by page,

@@ -39,7 +39,7 @@ import { beginIngest, drainIngests, resumeIngests } from "./runner.js";
  * The embedder is stubbed, so no model is downloaded and no ONNX runs — and
  * stubbing it is also the only way to make embedding fail on demand, which is
  * the most realistic mid-ingest failure there is (the real one downloads
- * ~130MB from HuggingFace on first use).
+ * ~130MB from Google Cloud Storage on first use).
  */
 
 /** A deterministic unit-ish vector of the width vec_chunks actually declares. */

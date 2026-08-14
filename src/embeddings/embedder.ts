@@ -4,10 +4,15 @@ import { MAX_TOKENS } from "../pipeline/chunker.js";
 /**
  * bge-small-en-v1.5, 384 dimensions, via fastembed (ONNX Runtime on CPU).
  *
- * The model is ~130MB and is downloaded from HuggingFace on first use, then
- * cached. This is the ONE network call the server makes; the source spec's
- * claim that "no outbound network calls remain anywhere" is true only of query
- * time, not of first run.
+ * The model is ~130MB and is downloaded on first use, then cached. Not from
+ * HuggingFace, despite `fastembed` depending on `@huggingface/hub`: that import
+ * serves the sparse-embedding path, which this build never calls. The URL is
+ * `storage.googleapis.com/qdrant-fastembed/<model>.tar.gz`.
+ *
+ * This is one of the server's two network calls — the other is tesseract.js
+ * fetching OCR language data on the first scanned PDF. The source spec's claim
+ * that "no outbound network calls remain anywhere" is true only of query time,
+ * not of first run.
  */
 
 export const EMBEDDING_MODEL = EmbeddingModel.BGESmallENV15;
@@ -111,8 +116,8 @@ export class Embedder {
         return m;
       });
 
-      // A FAILED init must not be cached. The first run downloads ~130MB from
-      // HuggingFace, so it is the one call here that routinely fails for
+      // A FAILED init must not be cached. The first run downloads ~130MB over
+      // the network, so it is the one call here that routinely fails for
       // reasons that pass — offline, a flaky hop, a half-written cache. Caching
       // the rejected promise made every later embed in the process rethrow that
       // same first error until restart, long after the network came back.

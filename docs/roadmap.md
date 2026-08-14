@@ -137,7 +137,9 @@ Those six decks also found two defects in the **PDF** reader, both fixed and bot
 rejected placeholder titles only in English, so a Spanish deck indexed as `Presentación de
 PowerPoint`; and a PDF bookmark's internal whitespace reached the section path, so a slide title
 centred with spaces became a `section_prefix` segment no caller could reproduce. See the corpus's
-`FINDINGS.md`.
+`FINDINGS.md` — the corpus is 175 MB of binaries and lives outside this repository, so that file is
+not here; **Where the corpus came from** below explains how to rebuild the folder from
+`corpus/manifest.json`.
 
 Hidden slides are excluded from **both** outputs, because PowerPoint leaves them out of the PDF and
 including their notes would make the two files disagree about what the deck contains. Both keep the

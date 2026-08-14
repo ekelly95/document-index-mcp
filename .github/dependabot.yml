@@ -5,11 +5,10 @@ version: 2
 # form that goes stale silently — nothing warns you that a pinned action is a
 # year behind.
 #
-# The npm ecosystem is deliberately NOT here. A Dependabot pull request triggers
-# ci.yml on `pull_request`, and Actions is disabled on this repository, so an
-# npm update would open a pull request that neither a human nor a machine can
-# verify. Add `package-ecosystem: npm` the day the repository goes public and CI
-# can prove the update.
+# The npm ecosystem was deliberately absent while this repository was private:
+# a Dependabot pull request triggers ci.yml on `pull_request`, Actions was
+# disabled, and an update no human and no machine can verify is worse than no
+# update. It is here now because the repository is public and CI can prove it.
 updates:
   - package-ecosystem: github-actions
     directory: /
@@ -20,5 +19,21 @@ updates:
       default-days: 7
     commit-message:
       prefix: "CI"
+    labels:
+      - dependencies
+
+  # pnpm-workspace.yaml carries an `overrides` entry forcing fastembed onto a
+  # patched `tar`, plus a matching patch file. Dependabot does not read either.
+  # If it ever proposes a fastembed bump, `pnpm install` will fail with
+  # UNUSED_PATCH rather than silently dropping the override — read the comment
+  # in pnpm-workspace.yaml before merging that one.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
     labels:
       - dependencies

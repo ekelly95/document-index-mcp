@@ -34,8 +34,12 @@ Initial release, developed privately under the name Scholar MCP.
 - The library root is a security boundary. Paths outside it are refused, so are
   symlinks that lexically pass but physically escape, and an extension allowlist
   keeps files like `.env` from being addressable at all.
-- Runs entirely offline after the first ingest, which downloads the ~130 MB
-  embedding model. That is the only outbound request the server ever makes.
+- Makes exactly two outbound requests, both one-time downloads of its own
+  machinery and neither carrying any document text: the ~130 MB embedding model
+  from Google Cloud Storage on first ingest, and ~3 MB of OCR language data from
+  a CDN on the first scanned PDF. Both are cached and neither repeats.
+  `--ocr-lang-path` points OCR at a local copy and removes the second. A library
+  with no scanned PDFs never makes it in the first place.
 - Concurrent ingests are safe across processes, and an interrupted one is
   recovered rather than left half-indexed. Claude Desktop starts two processes
   per server, which is why this is a lease on a row rather than a lock on a file.
@@ -48,6 +52,24 @@ Initial release, developed privately under the name Scholar MCP.
 - A vector-index fix cut a real 71-document library from 113 MB to 9.2 MB. The
   default block allocation was costing 1.5 MB per document whether it held three
   chunks or a thousand, so the index scaled with file count rather than content.
+- `--ocr-lang-path` / `DOCUMENT_INDEX_OCR_LANG_PATH` points OCR at a local
+  directory of tesseract language data instead of the CDN. It accepts either the
+  gzipped form the npm packages ship or the plain files `tessdata_fast` and
+  `tessdata_best` publish, since tesseract.js asks for one filename or the other
+  and does not sniff.
+- `tar` is pinned ahead of what `fastembed` asks for. Its declared range ends at
+  a version with twelve advisories against it and no patched successor, so
+  `pnpm-workspace.yaml` overrides it and patches the single import that would
+  otherwise stop the server starting. `pnpm audit` reports nothing.
+
+**Corrections made just before this release, recorded because the documents were
+wrong rather than merely incomplete.** Four documents claimed the embedding model
+was the only outbound request, which overlooked the OCR language download, and
+several comments attributed the model to HuggingFace when it comes from Google
+Cloud Storage. A literal NUL byte in `ocrPool.ts` had made that one file look
+binary to git and to every search tool since it was written; `src/sources.test.ts`
+now fails the build on any raw control character, which is the check
+`docs/gotchas.md` had asked for and nobody had written.
 
 **Supported platforms are Windows x64, Linux x64 and macOS.** The embedding
 model's tokenizer ships binaries for exactly those three, so on Linux arm64, on
