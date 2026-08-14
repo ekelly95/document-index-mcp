@@ -60,6 +60,16 @@ because each one is a trap that a reasonable change would walk straight back int
   transcript and paper intake. Fixed in schema v4 with `chunk_size=64`. If you ever reach for a second
   partition key, price it first: `SELECT DISTINCT length(vectors) FROM vec_chunks_vector_chunks00`
   times the row count of `vec_chunks_chunks` is the real cost.
+- **`drainIngests` unrefs its timeout, so a test that parks its only writer has nothing left alive.**
+  The unref is right: a server must not be held open purely to time out a wait. But a writer parked
+  on a gate holds no handle either, so during `await drainIngests(...)` in such a test the event
+  loop is genuinely empty — and node 22 then reports `Promise resolution is still pending but the
+  event loop has already resolved` and **cancels every remaining test in the file**, nine of them,
+  reported as failures with no assertion behind them. Node 24 tolerates the same state exactly, so
+  this passes locally on 24 and fails on 22 across all three platforms. `drainHoldingTheLoop` in
+  `runner.test.ts` holds a ref'd timer for the duration, which is the whole fix; in the real server
+  the stdio handles do that job. If you ever see a block of tests fail with no assertion message,
+  look for a parked promise before looking anywhere else.
 - **The library root must be resolved with `fs.realpathSync.native`, never plain `realpathSync`.**
   `beginIngest` asks `libraryRelative` for a file's path relative to `config.libraryRoot`, and that
   file has been through `assertRealPathInside`, which uses the `fs/promises` `realpath`. If the two

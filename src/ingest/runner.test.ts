@@ -79,6 +79,32 @@ function stubInit(failAfterBatches = Infinity): InitEmbedding {
  * exists to prevent. Failing the gate settles the promise without resuming
  * anything.
  */
+/**
+ * `drainIngests` with something keeping the event loop alive.
+ *
+ * Its timeout is deliberately unref'd — a server must not be held open purely
+ * to time out a wait — and a parked writer holds no handle either. So a test
+ * that parks its only ingest and then drains has genuinely nothing left alive,
+ * and node 22 reports "Promise resolution is still pending but the event loop
+ * has already resolved" and cancels every remaining test in the file. Node 24
+ * tolerates the same state, which is why this passed locally and failed on
+ * exactly half the matrix.
+ *
+ * A ref'd timer for the duration is the whole difference. In the real server
+ * the stdio handles play this part, which is why the unref is right there and
+ * only a problem here.
+ */
+async function drainHoldingTheLoop(timeoutMs: number): Promise<number> {
+  const keepAlive = setInterval(() => {}, 25);
+  try {
+    return await drainIngests(timeoutMs);
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
+const openGates: (() => void)[] = [];
+
 function gatedInit(passBatches = 0): {
   init: InitEmbedding;
   release: () => void;
@@ -90,6 +116,10 @@ function gatedInit(passBatches = 0): {
     release = resolve;
     abandon = () => reject(new Error("the test abandoned this ingest at the gate"));
   });
+  // Registered so afterEach can settle it whatever the test did. Rejecting an
+  // already-settled promise is a no-op, so a test that released its own gate
+  // is unaffected.
+  openGates.push(abandon);
   // A handler so failing a gate nothing is waiting on cannot become an
   // unhandled rejection; the awaiting `embed` below still sees the throw.
   gate.catch(() => {});
@@ -191,6 +221,23 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  /*
+   * Every gate is failed and every in-flight ingest drained before the database
+   * closes, whatever the test did with its own.
+   *
+   * Settling them inside each test was not enough: node 22 still reported
+   * "Promise resolution is still pending but the event loop has already
+   * resolved" and cancelled nine tests, while node 24 was clean on all three
+   * platforms. Rather than work out which promise node 22 counts differently,
+   * this closes the whole class — nothing survives a test that owns it.
+   *
+   * Draining before `db.close()` also stops an ingest resuming into a closed
+   * database, which is a different flake wearing the same clothes.
+   */
+  for (const abandon of openGates.splice(0)) abandon();
+  await drainHoldingTheLoop(2_000);
+  resumeIngests();
+
   db.close();
   await fs.rm(library, { recursive: true, force: true });
 });
@@ -234,7 +281,11 @@ test("shutdown gives up rather than hanging, and says what it left", async () =>
   const stuck = await beginIngest(contextWith(gate.init), "draft.md");
   await waitForChunks(stuck.documentId, 64);
 
-  assert.equal(await drainIngests(100), 1, "a stuck ingest was not reported as abandoned");
+  assert.equal(
+    await drainHoldingTheLoop(100),
+    1,
+    "a stuck ingest was not reported as abandoned",
+  );
 
   // It keeps its 'processing' row with an unrenewed lease, which is exactly
   // what recovery reclaims on the next start.

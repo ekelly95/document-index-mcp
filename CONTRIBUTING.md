@@ -33,7 +33,7 @@ pnpm build
 pnpm test
 ```
 
-Five things about that suite are worth knowing in advance.
+Six things about that suite are worth knowing in advance.
 
 **Never pipe the test run.** A `| tail` once masked a failing test in this
 project, which is why the instruction appears in the README, in both CI
@@ -61,6 +61,14 @@ was gone.
 **The first run downloads about 130 MB** — the embedding model, fetched once and
 cached. If you are touching OCR, the first scanned page fetches roughly 3 MB more
 of language data; `--ocr-lang-path` points that at a local copy instead.
+
+**A green run on your Node is not a green run.** CI covers Node 22 and 24, and
+they are not interchangeable: node 22's test runner cancels the rest of a file
+when it finds a promise still pending on an empty event loop, and node 24 does
+not. That difference hid a whole file's worth of failures behind a local pass.
+If you are touching anything involving shutdown, drains or parked work, run the
+other version before you push — `npx -y node@22 --test "dist/**/*.test.js"`
+needs no install.
 
 ### Things that will fail review
 
