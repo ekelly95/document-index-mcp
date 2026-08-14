@@ -38,7 +38,7 @@ carried notes holding figures that appear nowhere in the slide text — the slid
 Requires **Node 22 or newer** (developed on 24).
 
 ```bash
-git clone <repository-url> document-index-mcp
+git clone https://github.com/ekelly95/document-index-mcp.git
 cd document-index-mcp
 pnpm install
 pnpm build
