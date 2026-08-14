@@ -13,8 +13,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The event is part of the group on purpose. A push superseding an older push on
+# the same ref should cancel it; a manual full-matrix run should not. Without
+# this they share one group, so dispatching the wider matrix after pushing
+# cancels the push's own run — which leaves a cancelled ✗ beside every commit
+# and looks exactly like a failure to anyone reading the Actions tab.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
