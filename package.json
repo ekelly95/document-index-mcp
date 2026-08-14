@@ -34,7 +34,7 @@
   "bin": {
     "document-index-mcp": "dist/index.js"
   },
-  "//files": "Runtime output only. Tests compile into dist/ because `pnpm test` runs them from there, so they are excluded by negation rather than by a separate build config.",
+  "//files": "Runtime output plus the four documents a distributed copy has to carry: what it does, what changed, how to report a hole in it, and why its dependencies are licensed the way they are. Tests compile into dist/ because `pnpm test` runs them from there, so they are excluded by negation rather than by a separate build config.",
   "files": [
     "dist",
     "!dist/**/*.test.js",
@@ -43,7 +43,10 @@
     "!dist/testing",
     "!dist/eval",
     "README.md",
-    "LICENSE"
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE",
+    "NOTICE.md"
   ],
   "//clean": "tsc never deletes the .js belonging to a source file you removed, and the test script globs dist/. A deleted parser's tests therefore keep running, forever, against a build no source can reproduce — which is exactly what happened when EPUB and PPTX came out: six deleted test files kept passing and then failing from stale output. So every build wipes dist first. Inlined via node's own fs rather than adding a rimraf dependency; it is cross-platform either way.",
   "scripts": {

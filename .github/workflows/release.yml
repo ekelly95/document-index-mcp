@@ -1,34 +1,34 @@
-name: CI
+name: Release
 
-# Pushes and pull requests use Linux only. Manual runs add Windows and macOS;
-# use the full matrix before a release.
+# A release is driven by a tag rather than a button, so what gets attached is
+# always a named point in the history.
 #
-# Linux is not just the cheap default here — it is the only platform that can
-# run the symlink-escape case in paths.test.ts, which an ordinary Windows
-# session cannot create. The path jail is unproven on the development machine
-# and proven here.
+# ci.yml triggers on `push: branches`, which a tag push does not match. So the
+# guards protecting the artefact are repeated here rather than assumed to have
+# run — a tag can point at a commit that never reached main.
+#
+# One job rather than two. ytn splits build from publish because PyPI trusted
+# publishing makes `id-token: write` itself the credential, and that has to be
+# quarantined. Nothing here is published to a registry; the only extra privilege
+# is `contents: write` to create the release, so splitting would buy nothing and
+# cost two more actions to keep pinned.
 on:
   push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    tags: ["v*"]
 
 permissions:
   contents: read
 
 env:
-  # The embedding model is ~130MB and downloads from HuggingFace on first use.
-  # Pinning the location lets actions/cache carry it between runs; the test
-  # suite reads this variable (src/tools/tools.test.ts).
+  # Same key and location as ci.yml, so a release run reuses the cached model
+  # rather than paying the 130MB download again.
   DOCUMENT_INDEX_MODEL_CACHE: ${{ github.workspace }}/.ci-models
 
 jobs:
-  typecheck:
+  release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
@@ -36,64 +36,34 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Types
-        run: pnpm exec tsc -p tsconfig.json --noEmit
-
-  test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
-        node-version: ["22", "24"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
-
-      # Keyed on the model name rather than the lockfile: the download is the
-      # same 130MB whatever else changes, and re-fetching it on every
-      # dependency bump would dominate the run.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
           key: bge-small-en-v1.5-${{ runner.os }}
 
-      # better-sqlite3's install script is blocked in pnpm-workspace.yaml, so
-      # this proves the shipped prebuilt binary loads on a platform that is not
-      # the development machine. If it ever does not, that is the failure worth
-      # catching, not a node-gyp fallback quietly papering over it.
       - run: pnpm install --frozen-lockfile
-      - name: Native modules load
-        run: node -e "require('better-sqlite3'); require('sqlite-vec'); console.log('ok')"
+
+      # A tag pointing at a commit whose package.json says something else is the
+      # one mistake that cannot be corrected after the fact, because the release
+      # is named by the tag and the archive is named by the version.
+      - name: The tag names the version being released
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag $tag does not match package.json version $version"
+            exit 1
+          fi
 
       # Never piped. A `| tail` once masked a failing test in this project.
-      - name: Tests
+      - name: Tests, on the exact commit being released
         run: pnpm test
 
-  pack:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@008330803749db0355799c700092d9a85fd074e9 # v6.0.9
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      # `pnpm test` builds first, and it compiles the test files into dist/ as
+      # well — which makes this a stricter check of the `files` allowlist than
+      # ci.yml's, where pack runs against a build that never saw the tests.
       - run: pnpm pack
 
-      # The published archive is runtime output plus four documents: the README,
-      # the changelog, the security policy and the licence with its notice.
-      # Tests, fixtures and TypeScript sources have no business in it, and the
-      # `files` allowlist in package.json is what keeps them out. The required
-      # list is asserted as well as the exclusions, because a document silently
-      # dropped from the allowlist is the failure nobody notices.
       - name: No sources or tests escaped into the archive
         run: |
           contents=$(tar -tzf document-index-mcp-*.tgz)
@@ -111,7 +81,7 @@ jobs:
           done
 
       # A packed archive that cannot start is a release that cannot be
-      # installed. This is the check the release plan asks for: prove it works
+      # installed. Same check ci.yml runs, for the same reason: prove it works
       # outside the development checkout.
       - name: Install from the archive and start against a scratch library
         run: |
@@ -143,3 +113,21 @@ jobs:
             });
             setTimeout(() => { console.error('server did not answer initialize'); process.exit(1); }, 60000);
           "
+
+      # The release notes are the changelog entry, so a version with no entry
+      # cannot be released. That is the point: it is the only thing forcing the
+      # changelog to stay current.
+      - name: Publish the release, with its changelog entry as the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          notes=$(awk -v want="## $version" '$0 == want { found = 1; next } /^## / && found { exit } found' CHANGELOG.md)
+          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no '## $version' entry"
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "$notes" \
+            document-index-mcp-*.tgz

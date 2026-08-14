@@ -31,11 +31,21 @@ pwsh scripts/convert-for-ingest.ps1 "C:\Users\you\Library\Lectures" -Recurse
 Both files matter. A PDF export drops speaker notes, and measured on a real 28-slide deck, 22 slides
 carried notes holding figures that appear nowhere in the slide text — the slides were artwork.
 
+⚠️ **That script is Windows-only.** It drives your installed Word and PowerPoint through COM, so it
+needs Microsoft Office on the machine and there is no macOS or Linux equivalent. On those platforms
+a deck has no route in at all — convert it to PDF by whatever means you already have, and ingest that,
+knowing the speaker notes are lost.
+
 ---
 
 ## Install
 
-Requires **Node 22 or newer** (developed on 24).
+Requires **Node 22 or newer** (developed on 24), on **Windows x64, Linux x64 or macOS**.
+
+Those three are the whole list, and the limit is inherited rather than chosen: the embedding model's
+tokenizer ships binaries for exactly those targets. On Linux arm64, on Alpine, or on Windows-on-ARM
+the install succeeds and then the first search fails from inside a dependency, which is a miserable
+way to find out.
 
 ```bash
 git clone https://github.com/ekelly95/document-index-mcp.git
@@ -278,4 +288,9 @@ The engineering record lives in `docs/`, and is worth reading before changing an
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE), and [NOTICE.md](NOTICE.md) for the dependency
+choices that keep it permissive — chiefly why PDF parsing uses `pdfjs-dist`
+rather than the AGPL library the specification named.
+
+Changes are recorded in [CHANGELOG.md](CHANGELOG.md); the security model and how
+to report a vulnerability are in [SECURITY.md](SECURITY.md).

@@ -1,0 +1,24 @@
+version: 2
+
+# Keep commit-pinned GitHub Actions current. Every `uses:` in ci.yml and
+# release.yml names a full 40-character SHA, which is the safe form and also the
+# form that goes stale silently — nothing warns you that a pinned action is a
+# year behind.
+#
+# The npm ecosystem is deliberately NOT here. A Dependabot pull request triggers
+# ci.yml on `pull_request`, and Actions is disabled on this repository, so an
+# npm update would open a pull request that neither a human nor a machine can
+# verify. Add `package-ecosystem: npm` the day the repository goes public and CI
+# can prove the update.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # Let a new action release sit for a week before proposing it.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "CI"
+    labels:
+      - dependencies

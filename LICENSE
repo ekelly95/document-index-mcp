@@ -19,17 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party notice — why PDF parsing uses pdfjs-dist.
-
-The source specification called for `mupdf` (MuPDF.js WASM). `mupdf@1.28.0` is
-AGPL-3.0-or-later, which is viral over a whole server that links it. This build
-uses `pdfjs-dist` (Apache-2.0) instead, which covers every requirement:
-`getTextContent()` transforms for bounding boxes and font size, `getPageLabels()`
-for printed page labels, and `getOutline()` for embedded bookmarks.
-
-Keeping this project permissively licensed depends on that substitution. Any
-future PDF, OCR or layout-analysis dependency should be checked against the same
-bar before it is added.
