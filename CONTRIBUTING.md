@@ -58,9 +58,13 @@ CI run says nothing about that file.
 output from deleted source files once kept tests alive after the code under them
 was gone.
 
-**The first run downloads about 130 MB** — the embedding model, fetched once and
-cached. If you are touching OCR, the first scanned page fetches roughly 3 MB more
-of language data; `--ocr-lang-path` points that at a local copy instead.
+**The suite does not download the model.** It runs against a hashing stub, which
+is why it takes seconds. Set `DOCUMENT_INDEX_TEST_REAL_MODEL=1` to run against
+the real one — about 130 MB, fetched once and cached — and do that if you touch
+anything in `src/embeddings/`, the fastembed patch or the model cache. CI covers
+it on one job and every release runs it. If you are touching OCR, the first
+scanned page fetches roughly 3 MB of language data; `--ocr-lang-path` points
+that at a local copy instead.
 
 **A green run on your Node is not a green run.** CI covers Node 22 and 24, and
 they are not interchangeable: node 22's test runner cancels the rest of a file

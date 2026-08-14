@@ -66,7 +66,14 @@ jobs:
           fi
 
       # Never piped. A `| tail` once masked a failing test in this project.
+      #
+      # Against the real model, always. CI runs the suite stubbed for speed and
+      # covers the model on one job; a release is the wrong place to take that
+      # trade, since a broken model pipeline is every new user's first ingest
+      # failing.
       - name: Tests, on the exact commit being released
+        env:
+          DOCUMENT_INDEX_TEST_REAL_MODEL: "1"
         run: pnpm test
 
       # `pnpm test` builds first, and it compiles the test files into dist/ as

@@ -41,6 +41,14 @@ measurements are in [SECURITY.md](SECURITY.md); what changed is here.
   a permanently warm cache meant the patched extract path had never run in CI.
 - **Workflow checkouts no longer persist the GitHub token**, including the
   release job, which holds `contents: write` and then runs the test suite.
+- **The test suite no longer loads the embedding model.** The end-to-end file
+  was the only thing that did, at 11.1 of the suite's 12 seconds, to assert
+  things that are not claims about embedding quality. It uses a hashing
+  bag-of-words stub — real word-overlap similarity, not noise, so the fused
+  ranking stays stable and the assertions still mean what they say. That file
+  went 11.1s to 1.7s. `DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs against the real
+  model; CI does that on one job and every release does it, since no stub covers
+  the download, the patched tar extract or ONNX loading.
 
 ## 0.1.0
 

@@ -66,8 +66,20 @@ leave no trace anywhere a person would look.
 Still open, in value order: startup reconciliation of chunk/FTS/vector counts (`indexCounts()`
 already exists and is called only by the CLI), a `search_fts` rebuild command, schema-migration
 scaffolding (the v1→v2 bump for `ts-ocr` shipped without it — the index is derived data, so the
-migration is delete-and-re-ingest, and `openDatabase` says so), and a fast/real-model test split so
-the e2e tests stop loading the 130MB ONNX model. None of them block EPUB.
+migration is delete-and-re-ingest, and `openDatabase` says so). None of them block EPUB.
+
+**The fast/real-model test split is done.** The end-to-end file was the only thing loading the
+130MB ONNX model, and at 11.1 of the suite's 12 seconds it was most of what a test run cost — paid
+by everyone, on every run, to assert things that are not claims about embedding quality. It now uses
+a hashing bag-of-words stub (`src/testing/stubEmbedder.ts`), which is deliberately not noise: real
+word-overlap similarity keeps the semantic leg sane, so the fused ordering stays stable and the
+assertions still mean what they say. That file went 11.1s to 1.7s and the suite 10.8s to 7.6s, where
+the long pole is now real OCR, which is worth what it costs.
+
+`DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs it against the real model. CI does that on one job rather
+than six, and the release workflow always does — a stub cannot stand in for the download, the tar
+extract the fastembed patch touches, or ONNX loading, and those breaking means every new user's
+first ingest fails.
 
 **Cross-process is now closed** — it used to be the one real gap. `recoverInterrupted` reset *every*
 `processing` row at startup, so running `pnpm ingest` while the server was mid-ingest cleared the

@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { loadConfig } from "../config.js";
 import { createContext, type AppContext } from "../context.js";
+import { testEmbedder } from "../testing/stubEmbedder.js";
 import { buildServer } from "../server.js";
 import { indexCounts } from "../db/chunksRepo.js";
 import { deleteDocument } from "../db/documentsRepo.js";
@@ -15,8 +16,17 @@ import { buildPdf, type PdfFixture } from "../testing/pdfFixture.js";
 /**
  * End-to-end over the real MCP surface.
  *
- * The embedding model is ~130MB. It is cached in a stable temp directory so a
- * test run does not re-download it; DOCUMENT_INDEX_MODEL_CACHE overrides the location.
+ * Runs against a stub embedder by default — see `testing/stubEmbedder.ts` for
+ * why that does not weaken what these tests assert. This file was the only
+ * thing loading the real model and cost eleven of the suite's twelve seconds,
+ * which is a toll paid on every run of every test by everyone.
+ *
+ * `DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs it against the real model instead.
+ * CI does that on one job, and the release workflow always does, so the
+ * download, the patched tar extract and ONNX loading stay covered.
+ *
+ * The model is ~130MB and cached in a stable temp directory so the real run
+ * does not re-download it; DOCUMENT_INDEX_MODEL_CACHE overrides the location.
  */
 const MODEL_CACHE =
   process.env["DOCUMENT_INDEX_MODEL_CACHE"] ??
@@ -181,9 +191,9 @@ before(async () => {
     ["READING NOTES", "", "1. Introduction", "", "The author rejects the standard framing.", ""].join("\n"),
   );
 
-  ctx = createContext(
-    loadConfig([`--library=${library}`, `--models=${MODEL_CACHE}`]),
-  );
+  ctx = createContext(loadConfig([`--library=${library}`, `--models=${MODEL_CACHE}`]), {
+    embedder: testEmbedder(MODEL_CACHE),
+  });
   const server = buildServer(ctx);
 
   client = new Client({ name: "document-index-mcp-test", version: "0.0.0" });

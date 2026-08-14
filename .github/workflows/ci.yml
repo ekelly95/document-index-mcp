@@ -98,21 +98,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
 
-      # Keyed on the model name rather than the lockfile: the download is the
-      # same 130MB whatever else changes, and re-fetching it on every
-      # dependency bump would dominate the run.
-      #
-      # The `-tar7` is not decoration and must not be tidied away. A constant
-      # key means the model directory always exists, and fastembed's
-      # retrieveModel returns early when it does — so `tar.x`, which is the ONLY
-      # thing patches/fastembed@2.1.0.patch touches, never ran here at all. The
-      # cache was warm from before the patch existed, so the patched line had
-      # never once been executed in CI. Changing the key retires that cache and
-      # makes the extract happen. Bump the suffix again if the patch changes.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
-          key: bge-small-en-v1.5-tar7-${{ runner.os }}
+      # No model cache here on purpose. These jobs run against the stub
+      # embedder, so they neither download the 130MB model nor load ONNX — the
+      # end-to-end file was the only thing that did, and it cost eleven of the
+      # suite's twelve seconds on every job. The real model is covered once, by
+      # the `real-model` job below, rather than six times here.
 
       # better-sqlite3's install script is blocked in pnpm-workspace.yaml, so
       # this proves the shipped prebuilt binary loads on a platform that is not
@@ -124,6 +114,44 @@ jobs:
 
       # Never piped. A `| tail` once masked a failing test in this project.
       - name: Tests
+        run: pnpm test
+
+  # The half a stub cannot stand in for: the download, the tar extract that
+  # patches/fastembed@2.1.0.patch touches, and ONNX actually loading. Broken,
+  # that is "every new user's first ingest fails", so it gates a merge like the
+  # rest — once, on one platform, rather than on all six.
+  real-model:
+    runs-on: ubuntu-latest
+    env:
+      DOCUMENT_INDEX_TEST_REAL_MODEL: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      # Keyed on the model name rather than the lockfile: the download is the
+      # same 130MB whatever else changes, and re-fetching it on every dependency
+      # bump would dominate the run.
+      #
+      # The `-tar7` is not decoration and must not be tidied away. A constant key
+      # means the model directory always exists, and fastembed's retrieveModel
+      # returns early when it does — so `tar.x`, the ONLY thing the patch
+      # touches, never ran here at all. The cache was warm from before the patch
+      # existed, so the patched line had never once been executed in CI. Changing
+      # the key retires that cache and makes the extract happen. Bump the suffix
+      # again if the patch changes.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
+          key: bge-small-en-v1.5-tar7-${{ runner.os }}
+
+      - run: pnpm install --frozen-lockfile
+      - name: Tests, against the real model
         run: pnpm test
 
   pack:
