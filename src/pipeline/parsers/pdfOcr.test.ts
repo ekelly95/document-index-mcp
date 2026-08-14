@@ -171,10 +171,21 @@ test("forceOcr recognises imagery even under a plausible text layer", async () =
 
   const trusted = textOf(await collect(src));
   assert.ok(trusted.includes(layer), "without forceOcr a usable layer should win");
+  // The text-layer route reads lines and never rasterises anything, so the
+  // image it is sitting on top of must be invisible to it.
+  assert.doesNotMatch(trusted, /lighthouse/i, "the text-layer route read the image");
 
+  // Reading the image at all is what proves the OCR route was taken: the two
+  // routes are exclusive, and only one of them can see a lighthouse.
   const forced = textOf(await collect(src, { ...OPTS, forceOcr: true }));
   assert.match(forced, /lighthouse/i);
-  assert.ok(!forced.includes(layer), "forceOcr still returned the text layer");
+
+  // There is deliberately no assertion that `forced` excludes `layer`.
+  // Rasterising this page draws the text layer as well as the image, so OCR
+  // reads both, and asking for the layer's absence was really asking OCR to
+  // misread a clean printable sentence. It obliged on one machine and
+  // transcribed it perfectly on every CI runner, which is a test measuring
+  // recognition accuracy while claiming to measure routing.
 });
 
 test("metadata reports the page scheme and true page count", async () => {

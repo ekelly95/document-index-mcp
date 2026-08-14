@@ -70,11 +70,29 @@ function stubInit(failAfterBatches = Infinity): InitEmbedding {
  * released, so a document can be held in 'processing' for as long as a test
  * needs to look at it.
  */
-function gatedInit(passBatches = 0): { init: InitEmbedding; release: () => void } {
+/**
+ * `release` lets the writer carry on. `abandon` fails it where it stands.
+ *
+ * Both exist because a test that parks a writer has to settle it somehow before
+ * the file ends, and for a writer whose state has already been reclaimed,
+ * letting it carry on is not an option — that is the corruption the lease
+ * exists to prevent. Failing the gate settles the promise without resuming
+ * anything.
+ */
+function gatedInit(passBatches = 0): {
+  init: InitEmbedding;
+  release: () => void;
+  abandon: () => void;
+} {
   let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
+  let abandon!: () => void;
+  const gate = new Promise<void>((resolve, reject) => {
     release = resolve;
+    abandon = () => reject(new Error("the test abandoned this ingest at the gate"));
   });
+  // A handler so failing a gate nothing is waiting on cannot become an
+  // unhandled rejection; the awaiting `embed` below still sees the throw.
+  gate.catch(() => {});
   let calls = 0;
   const model = {
     async *embed(inputs: string[]) {
@@ -82,7 +100,7 @@ function gatedInit(passBatches = 0): { init: InitEmbedding; release: () => void 
       yield inputs.map(() => VECTOR);
     },
   } as unknown as FlagEmbedding;
-  return { init: async () => model, release };
+  return { init: async () => model, release, abandon };
 }
 
 /**
@@ -227,6 +245,12 @@ test("shutdown gives up rather than hanging, and says what it left", async () =>
   assert.equal(recoverInterrupted(db, Date.now() + INGEST_LEASE_MS + 1), 1);
 
   resumeIngests();
+  // Failed rather than released, and awaited: see `gatedInit`. A gate left
+  // parked is a promise that never settles, and node's test runner then reports
+  // "Promise resolution is still pending but the event loop has already
+  // resolved" and cancels every test after it in this file.
+  gate.abandon();
+  await stuck.done.catch(() => {});
 });
 
 test("no new ingest is accepted once shutdown has begun", async () => {
@@ -263,10 +287,18 @@ test("recovery reclaims an abandoned ingest but never a live one", async () => {
   assert.equal(recoverInterrupted(db, Date.now() + INGEST_LEASE_MS + 1), 1);
   assert.equal(rowsOf(stalled.documentId), 0, "an abandoned ingest kept its chunks");
 
-  // The gate is deliberately never released. Letting the writer resume after
+  // The gate is deliberately never RELEASED: letting the writer resume after
   // its state has been reclaimed is the corruption this whole change exists to
-  // prevent, and there is nothing to learn from staging it here. A parked
-  // promise holds no handle, so it does not keep the test process alive.
+  // prevent, and there is nothing to learn from staging it here.
+  //
+  // It is still failed and awaited, though. This used to say that a parked
+  // promise holds no handle and so does not keep the test process alive, which
+  // is true and beside the point — node's test runner notices the pending
+  // promise anyway, reports "Promise resolution is still pending but the event
+  // loop has already resolved", and cancels every test after it in this file.
+  // Nine of them, in CI, on every platform, while the file passed locally.
+  gate.abandon();
+  await stalled.done.catch(() => {});
 });
 
 test("a lease renewal touches only a live claim", () => {
