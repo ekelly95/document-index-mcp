@@ -1,28 +1,26 @@
 # Contributing
 
-Thank you for looking. This is a small project maintained by one person in spare
-time, so please read the two sections below before opening anything — they will
-save you the most effort.
+A small project maintained by one person in spare time. The two sections below
+will save you the most effort.
 
 ## Before you open an issue
 
-**Say which platform you are on.** Supported platforms are Windows x64, Linux
-x64 and macOS, and nothing else. The embedding model's tokenizer ships binaries
-for exactly those three, so on Linux arm64, on Alpine, or on Windows-on-ARM the
-install succeeds and the first *search* then fails from inside a dependency.
-That failure looks like a bug in this project and is not one. Please include
-your operating system, processor architecture and `node --version`.
+**Say which platform you are on.** Windows x64, Linux x64 and macOS are the
+whole supported list: the embedding model's tokenizer ships binaries for exactly
+those three, so on Linux arm64, Alpine or Windows-on-ARM the install succeeds and
+the first *search* then fails from inside a dependency — a failure that looks
+like a bug here and is not one. Include your OS, architecture and
+`node --version`.
 
-The slide-deck converter (`scripts/convert-for-ingest.ps1`) is narrower still:
-it drives Word and PowerPoint through COM, so it needs Windows with Microsoft
-Office installed. There is no macOS or Linux equivalent and none is planned.
+The slide-deck converter (`scripts/convert-for-ingest.ps1`) is narrower still: it
+drives Word and PowerPoint through COM, so it needs Windows with Office. There is
+no macOS or Linux equivalent and none is planned.
 
 **Retrieval quality is not a bug report.** The fusion score orders results
 without measuring relevance, so a search of a library that does not cover your
-question still returns a confident-looking five. That is a known defect,
-recorded in [docs/roadmap.md](docs/roadmap.md). A report that a particular query
-ranks badly is welcome as evidence, but the general shape of the problem is
-already understood.
+question still returns a confident-looking five — a known defect, recorded in
+[docs/roadmap.md](docs/roadmap.md). A particular query ranking badly is welcome
+as evidence, but the shape of the problem is already understood.
 
 **Suspected vulnerabilities go to [SECURITY.md](SECURITY.md)**, not to a public
 issue.
@@ -42,29 +40,27 @@ project, which is why the instruction appears in the README, in both CI
 workflows and here. Let it print.
 
 **One test skips on Windows.** The symlink-escape case in
-`src/security/paths.test.ts` needs Developer Mode or an elevated shell, because
-Windows will not let an ordinary user create a symlink. It reports itself as
-skipped rather than passing quietly. That test is the only thing proving the
-path jail cannot be escaped, so if you are changing anything under
-`src/security/`, get a Linux run before you trust a green result — CI does this
-for you on every pull request.
+`src/security/paths.test.ts` needs Developer Mode or an elevated shell, since
+Windows will not let an ordinary user create a symlink; it reports itself skipped
+rather than passing quietly. It is the only thing proving the path jail cannot be
+escaped, so if you are changing anything under `src/security/`, get a Linux run
+before trusting a green result — CI does this on every pull request.
 
 **The conversion script has no automated test at all.**
-`scripts/convert-for-ingest.ps1` needs Windows with Office installed, and no CI
-runner has that. It also carries real security settings — it force-disables
-macros before opening a document, because opening an untrusted `.doc` through
-Word is the one place this project runs someone else's code. Changing it means
-verifying by hand against a real `.doc` and a real `.pptx`, and confirming the
-output is unchanged. Treat a green CI run as saying nothing about that file.
+`scripts/convert-for-ingest.ps1` needs Windows with Office, and no CI runner has
+that. It also carries real security settings: it force-disables macros before
+opening a document, because opening an untrusted `.doc` through Word is the one
+place this project runs someone else's code. Changing it means verifying by hand
+against a real `.doc` and `.pptx` and confirming the output is unchanged. A green
+CI run says nothing about that file.
 
-**`pnpm test` builds first, and the build cleans `dist/` first.** Both are
-deliberate. Stale compiler output from deleted source files once kept tests
-alive after the code under them was gone.
+**`pnpm test` builds first, and the build cleans `dist/` first.** Stale compiler
+output from deleted source files once kept tests alive after the code under them
+was gone.
 
-**The first run downloads about 130 MB.** That is the embedding model, fetched
-once from Google Cloud Storage and cached. If you are also touching OCR, the
-first scanned page fetches roughly 3 MB more of language data from a CDN;
-`--ocr-lang-path` points that at a local copy instead.
+**The first run downloads about 130 MB** — the embedding model, fetched once and
+cached. If you are touching OCR, the first scanned page fetches roughly 3 MB more
+of language data; `--ocr-lang-path` points that at a local copy instead.
 
 ### Things that will fail review
 

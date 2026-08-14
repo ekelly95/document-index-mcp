@@ -3,15 +3,15 @@
 Most of these were bugs first. They are recorded here rather than in a commit message
 because each one is a trap that a reasonable change would walk straight back into.
 
-- **`ingest_status = 'processing'` is the ingest lock, and better-sqlite3 is why that works.**
-  It is synchronous, so a `db.transaction(...)` containing the whole check-then-write preamble
-  has no await inside it for the event loop to switch on — check-then-write is atomic by
-  construction. A row in `processing` therefore has exactly one writer, and every other caller
-  must leave it strictly alone. An earlier version ran that preamble unlocked and held a mutex
-  only around indexing, which let a second ingest of the same file call `deleteChunksOf` on a
-  live one, re-index from `seq 0`, collide on `UNIQUE(document_id, seq)`, and then have its own
-  error handler delete the first ingest's *finished* index and mark the document failed. Two
-  concurrent ingests could destroy a good index. If it is `processing`, it is not yours.
+- **`ingest_status = 'processing'` is the ingest lock, and better-sqlite3 is why that works.** It is
+  synchronous, so a `db.transaction(...)` wrapping the whole check-then-write preamble has no await
+  inside it for the event loop to switch on: check-then-write is atomic by construction. A
+  `processing` row therefore has exactly one writer, and every other caller must leave it strictly
+  alone. An earlier version ran that preamble unlocked and held a mutex only around indexing, which
+  let a second ingest of the same file call `deleteChunksOf` on a live one, re-index from `seq 0`,
+  collide on `UNIQUE(document_id, seq)`, and then have its own error handler delete the first
+  ingest's *finished* index and mark the document failed — two concurrent ingests destroying a good
+  index. If it is `processing`, it is not yours.
 - **`recoverInterrupted` is load-bearing, not just tidy.** Because `processing` is the claim, a
   row left behind by a crash would refuse every future ingest of that file. Clearing it at
   startup (`context.ts`) is what releases the claim. It clears only claims whose **lease** has
@@ -35,15 +35,14 @@ because each one is a trap that a reasonable change would walk straight back int
 - **Never write a control character as a literal byte — use the `\uXXXX` escape.** Two separators
   here are control characters on purpose — `pdfFast.ts` joins a bookmark trail with `\u0000`, and
   `ocrPool.ts` builds its OCR pool key the same way — because a heading or a path can never
-  contain one, so two different trails can never collide into the same key. Written as raw bytes,
-  though, a single NUL makes every binary-sniffing tool treat the whole file as binary: `git diff`
-  stops showing it, ripgrep skips it, and repomix drops it from a pack **silently**. That is not
-  hypothetical, and it has now happened twice — `chunker.ts`, `outline.ts` and `pdfFast.ts` were
-  invisible in a review pack for exactly this reason, and the reviewer had to work from their
-  tests; later `ocrPool.ts` did it again on its own, and shipped that way until a pre-release
-  review caught it. The escapes compile to identical strings. This is no longer advice you have to
-  remember: `src/sources.test.ts` scans `src/**/*.ts` and `scripts/**/*.mjs` for bytes below `0x20`
-  other than tab, LF and CR, and names the file, line and column of anything it finds.
+  contain one, so two different trails can never collide. Written as a raw byte, though, a single
+  NUL makes every binary-sniffing tool treat the whole file as binary: `git diff` stops showing it,
+  ripgrep skips it, repomix drops it from a pack **silently**. That has now happened twice —
+  `chunker.ts`, `outline.ts` and `pdfFast.ts` were invisible in a review pack, leaving the reviewer
+  to work from their tests, and later `ocrPool.ts` did it again and shipped that way until a
+  pre-release review caught it. The escapes compile to identical strings. No longer advice you have
+  to remember: `src/sources.test.ts` scans `src/**/*.ts` and `scripts/**/*.mjs` for bytes below
+  `0x20` other than tab, LF and CR, naming the file, line and column of anything it finds.
 - **vec0 rejects plain JS numbers as primary keys.** better-sqlite3 binds them as SQLite REAL; sqlite-vec
   needs a true INTEGER and fails with `Only integers are allows for primary key values`. Every rowid
   crossing into `vec_chunks` goes through `vecRowid()`, which returns a `BigInt`.
@@ -61,20 +60,17 @@ because each one is a trap that a reasonable change would walk straight back int
   transcript and paper intake. Fixed in schema v4 with `chunk_size=64`. If you ever reach for a second
   partition key, price it first: `SELECT DISTINCT length(vectors) FROM vec_chunks_vector_chunks00`
   times the row count of `vec_chunks_chunks` is the real cost.
-- **A per-entry zip cap is not an archive cap, and raising `MAX_ENTRY_BYTES` alone will not
-  make one.** Zip entry names are not unique. fflate walks the central directory without
-  deduplicating, allocates each kept entry's **declared** uncompressed size, inflates into it,
-  and lets a later record of the same name overwrite the earlier one in the returned map — so
-  every copy is paid for and only the last is kept. `keepEntry` in `docx.ts` matches four exact
-  names, which means 65,535 records all called `word/document.xml` all pass it. Measured against
-  the real reader: a 3.7 MB file built that way inflated 4.0 GB in 8.9 seconds, flat at
-  0.45 GB/s with nothing to stop it, and `unzipSync` is synchronous — for that whole window the
-  server answers nothing, not even its own shutdown drain. `openZip` now skips a name it has
-  already taken and holds a running total (`MAX_TOTAL_BYTES`, four times the entry cap because
-  four is what the one real caller keeps). The test for it asserts that a thousand-duplicate
-  archive **opens**, which is not the obvious assertion: `names()` reads identically whether the
-  duplicates were skipped or inflated, so the only proof that they were skipped is that they did
-  not consume the budget.
+- **A per-entry zip cap is not an archive cap, and raising `MAX_ENTRY_BYTES` will not make one.**
+  Zip entry names are not unique. fflate walks the central directory without deduplicating,
+  allocates each kept entry's **declared** uncompressed size, inflates into it, and lets a later
+  record of the same name overwrite the earlier one — every copy is paid for and only the last is
+  kept. `keepEntry` in `docx.ts` matches four exact names, so 65,535 records all called
+  `word/document.xml` all pass. Measured against the real reader: 3.7 MB of input inflated 4.0 GB
+  in 8.9 seconds, flat at 0.45 GB/s, and `unzipSync` is synchronous — for that whole window the
+  server answers nothing, not even its shutdown drain. `openZip` now skips a name already taken
+  and holds a running total (`MAX_TOTAL_BYTES`). The test asserts that a thousand-duplicate
+  archive **opens**, which is not the obvious assertion: `names()` reads identically either way,
+  so the only proof the duplicates were skipped is that they did not consume the budget.
 - **fastembed's `passageEmbed` / `queryEmbed` apply E5 prefixes**, not BGE's. `embedder.ts` calls
   `embed()` directly and applies the correct BGE query instruction itself.
 - **pnpm 10+ blocks postinstall scripts**, and the allowlist lives in `pnpm-workspace.yaml` — the
