@@ -60,6 +60,20 @@ because each one is a trap that a reasonable change would walk straight back int
   transcript and paper intake. Fixed in schema v4 with `chunk_size=64`. If you ever reach for a second
   partition key, price it first: `SELECT DISTINCT length(vectors) FROM vec_chunks_vector_chunks00`
   times the row count of `vec_chunks_chunks` is the real cost.
+- **The library root must be resolved with `fs.realpathSync.native`, never plain `realpathSync`.**
+  `beginIngest` asks `libraryRelative` for a file's path relative to `config.libraryRoot`, and that
+  file has been through `assertRealPathInside`, which uses the `fs/promises` `realpath`. If the two
+  ends resolve differently they are two spellings of one place, `path.relative` climbs out and back,
+  and `source_path` becomes `../../../../../runneradmin/AppData/.../note.md` instead of `note.md` —
+  so a file stops matching itself, an edited document is never superseded, and one library path
+  holds two rows. On Windows the two forms genuinely differ:
+  `fs.realpathSync("C:/PROGRA~1")` returns `C:\PROGRA~1` unchanged, while `fs.realpathSync.native`
+  and the promises form both return `C:\Program Files`. Linux never shows any of this, because
+  `/tmp` is already canonical; macOS shows it via `/var` → `/private/var`; Windows shows it via 8.3
+  short names, which is what a GitHub Actions temp directory is. Fixing it with the plain form
+  repaired macOS and left Windows untouched, and that is how the distinction was found. There is a
+  test pinning `config.libraryRoot` against the promises `realpath` directly, so the two cannot
+  drift apart again.
 - **A per-entry zip cap is not an archive cap, and raising `MAX_ENTRY_BYTES` will not make one.**
   Zip entry names are not unique. fflate walks the central directory without deduplicating,
   allocates each kept entry's **declared** uncompressed size, inflates into it, and lets a later

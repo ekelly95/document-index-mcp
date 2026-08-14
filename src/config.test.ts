@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DEFAULT_MAX_FILE_MB, DEFAULT_OCR_WORKERS, loadConfig } from "./config.js";
@@ -33,7 +34,7 @@ test("the renamed environment and derived paths are the defaults", () => {
     const config = loadConfig([]);
     // realpath, not resolve: the root is canonicalised, and macOS hands out a
     // temp directory under /var, which is a symlink to /private/var.
-    const root = fs.realpathSync(path.resolve(lib));
+    const root = fs.realpathSync.native(path.resolve(lib));
     assert.equal(config.libraryRoot, root);
     assert.equal(config.dbPath, path.join(root, ".document-index", "document-index.db"));
     assert.equal(config.modelCacheDir, path.join(root, ".document-index", "models"));
@@ -41,6 +42,22 @@ test("the renamed environment and derived paths are the defaults", () => {
     delete process.env["DOCUMENT_INDEX_LIBRARY_PATH"];
     for (const [name, value] of borrowed) if (value !== undefined) process.env[name] = value;
   }
+});
+
+test("the root agrees with what the path jail resolves to", async () => {
+  // The invariant, pinned directly rather than through its consequences.
+  // beginIngest asks libraryRelative for a file's path relative to
+  // config.libraryRoot, where the file has been through assertRealPathInside
+  // and therefore through fs/promises realpath. If these two ever disagree,
+  // every source_path comes back climbing out of the library.
+  //
+  // This is not theoretical symmetry. Resolving the root with plain
+  // fs.realpathSync satisfies it on Linux and macOS and fails it on Windows,
+  // where only the native form expands an 8.3 short name like RUNNER~1 —
+  // which is precisely the shape of a GitHub Actions temp directory.
+  const lib = tempLibrary();
+  const config = loadConfig([`--library=${lib}`]);
+  assert.equal(config.libraryRoot, await fsp.realpath(lib));
 });
 
 test("a library root reached through a symlink is canonicalised", (t) => {
@@ -61,7 +78,7 @@ test("a library root reached through a symlink is canonicalised", (t) => {
   }
 
   const config = loadConfig([`--library=${link}`]);
-  assert.equal(config.libraryRoot, fs.realpathSync(real));
+  assert.equal(config.libraryRoot, fs.realpathSync.native(real));
   assert.ok(
     !config.libraryRoot.includes("via"),
     `the symlink survived into the root: ${config.libraryRoot}`,

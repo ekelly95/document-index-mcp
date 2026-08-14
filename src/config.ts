@@ -100,8 +100,16 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
    * while Linux passed, because `/tmp` there is real.
    *
    * Resolving once, here, is what keeps every later comparison in one spelling.
+   *
+   * `.native` is not optional, and plain `realpathSync` is the trap. On Windows
+   * the two disagree: `fs.realpathSync("C:/PROGRA~1")` hands back `C:\PROGRA~1`
+   * unchanged, while `fs.realpathSync.native` and the `fs/promises` `realpath`
+   * that `assertRealPathInside` uses both give `C:\Program Files`. Resolving
+   * with the plain form therefore fixed macOS and left Windows exactly as
+   * broken as before — which is how this was found the second time. Whatever
+   * this uses has to match what `security/paths.ts` uses.
    */
-  const libraryRoot = fs.realpathSync(requestedRoot);
+  const libraryRoot = fs.realpathSync.native(requestedRoot);
 
   const dbPath = path.resolve(
     flags.get("db") ??
