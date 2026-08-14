@@ -14,3 +14,22 @@ allowBuilds:
   better-sqlite3: false
   onnxruntime-node: true
   tesseract.js: false
+# fastembed pins `tar: ^6.2.0`, and 6.2.1 is the end of that line: twelve
+# advisories against it, one critical, no patched 6.x to move to, and 2.1.0 is
+# the latest fastembed there is. onnxruntime-node already pulls a clean tar 7
+# into the tree, so this collapses the two copies onto the good one rather than
+# adding anything.
+#
+# The override and the patch below are one change and must be removed together.
+# tar 7 is ESM with no default export, so fastembed's `import tar from "tar"`
+# stops being a runtime problem and becomes a link-time SyntaxError — the server
+# would fail to start at all, for everyone, before any download. The patch makes
+# it a namespace import, which resolves to a working `.x` under both 6 and 7.
+#
+# `pnpm install` throws UNUSED_PATCH the day fastembed moves off 2.1.0. That is
+# the reminder to check whether its tar range has been fixed upstream and both
+# of these can go.
+overrides:
+  fastembed>tar: ^7.5.22
+patchedDependencies:
+  fastembed@2.1.0: patches/fastembed@2.1.0.patch
