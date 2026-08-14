@@ -37,3 +37,16 @@ updates:
       prefix: "deps"
     labels:
       - dependencies
+
+    # @types/node describes a particular Node, and this project supports the one
+    # in `engines`: 22. Installing types for a newer Node lets code compile
+    # against APIs that Node does not have, and CI cannot catch it — it
+    # type-checks once against whatever types are installed, then runs the suite
+    # on 22, where nothing yet reaches for the newer surface. The 22 -> 26 bump
+    # passed every check for exactly that reason, which is the point: a green
+    # run there says the present is fine and nothing about the failure it
+    # installs for the next change. Raise the floor in `engines` first, then
+    # this. Minor and patch updates still come through.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
