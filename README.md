@@ -120,6 +120,10 @@ pnpm ingest --library=/path/to/your/library "Papers" --recursive
 directory beneath it turns one command into a multi-hour sweep that fills the index with junk. This
 is the main argument for a dedicated library folder rather than your home directory.
 
+A document is read whole into memory, so files above 512 MB are refused rather than attempted.
+Raise it with `--max-file-mb=` or `DOCUMENT_INDEX_MAX_FILE_MB` if your library holds something
+bigger; the refusal names both the file's size and the limit, so you will know which to change.
+
 ---
 
 ## Formats
@@ -216,8 +220,9 @@ final synthesis can be traced back to the second of video it came from.
   Both are cached and neither repeats. `--ocr-lang-path=<dir>` points OCR at your own copy of the
   language data instead, which removes the second entirely — the files come from
   [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast). There is currently no equivalent
-  for the embedding model; it is downloaded without an integrity check, which is recorded in
-  [docs/roadmap.md](docs/roadmap.md).
+  for the embedding model. **Neither download is integrity-checked** — no checksum, no signature,
+  on either one; only the transport is trusted. This is recorded in
+  [docs/roadmap.md](docs/roadmap.md) and in [SECURITY.md](SECURITY.md).
 - The library root is a jail. Paths outside it are refused, symlinks that escape it are refused, and
   the extension allowlist keeps files like `.env` from being addressable at all.
 - Search results expose a library-relative path, never an absolute one.

@@ -61,6 +61,20 @@ because each one is a trap that a reasonable change would walk straight back int
   transcript and paper intake. Fixed in schema v4 with `chunk_size=64`. If you ever reach for a second
   partition key, price it first: `SELECT DISTINCT length(vectors) FROM vec_chunks_vector_chunks00`
   times the row count of `vec_chunks_chunks` is the real cost.
+- **A per-entry zip cap is not an archive cap, and raising `MAX_ENTRY_BYTES` alone will not
+  make one.** Zip entry names are not unique. fflate walks the central directory without
+  deduplicating, allocates each kept entry's **declared** uncompressed size, inflates into it,
+  and lets a later record of the same name overwrite the earlier one in the returned map — so
+  every copy is paid for and only the last is kept. `keepEntry` in `docx.ts` matches four exact
+  names, which means 65,535 records all called `word/document.xml` all pass it. Measured against
+  the real reader: a 3.7 MB file built that way inflated 4.0 GB in 8.9 seconds, flat at
+  0.45 GB/s with nothing to stop it, and `unzipSync` is synchronous — for that whole window the
+  server answers nothing, not even its own shutdown drain. `openZip` now skips a name it has
+  already taken and holds a running total (`MAX_TOTAL_BYTES`, four times the entry cap because
+  four is what the one real caller keeps). The test for it asserts that a thousand-duplicate
+  archive **opens**, which is not the obvious assertion: `names()` reads identically whether the
+  duplicates were skipped or inflated, so the only proof that they were skipped is that they did
+  not consume the budget.
 - **fastembed's `passageEmbed` / `queryEmbed` apply E5 prefixes**, not BGE's. `embedder.ts` calls
   `embed()` directly and applies the correct BGE query instruction itself.
 - **pnpm 10+ blocks postinstall scripts**, and the allowlist lives in `pnpm-workspace.yaml` — the

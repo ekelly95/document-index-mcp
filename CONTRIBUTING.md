@@ -35,7 +35,7 @@ pnpm build
 pnpm test
 ```
 
-Four things about that suite are worth knowing in advance.
+Five things about that suite are worth knowing in advance.
 
 **Never pipe the test run.** A `| tail` once masked a failing test in this
 project, which is why the instruction appears in the README, in both CI
@@ -48,6 +48,14 @@ skipped rather than passing quietly. That test is the only thing proving the
 path jail cannot be escaped, so if you are changing anything under
 `src/security/`, get a Linux run before you trust a green result — CI does this
 for you on every pull request.
+
+**The conversion script has no automated test at all.**
+`scripts/convert-for-ingest.ps1` needs Windows with Office installed, and no CI
+runner has that. It also carries real security settings — it force-disables
+macros before opening a document, because opening an untrusted `.doc` through
+Word is the one place this project runs someone else's code. Changing it means
+verifying by hand against a real `.doc` and a real `.pptx`, and confirming the
+output is unchanged. Treat a green CI run as saying nothing about that file.
 
 **`pnpm test` builds first, and the build cleans `dist/` first.** Both are
 deliberate. Stale compiler output from deleted source files once kept tests

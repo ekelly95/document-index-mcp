@@ -203,7 +203,7 @@ export async function beginIngest(
   // PDF probe, the metadata pass and the parse — works from this one buffer
   // and, for a PDF, from one pdfjs document built out of it. Closed when the
   // ingest ends, on every path out of this function.
-  const src = await openSource(absPath);
+  const src = await openSource(absPath, ctx.config.maxFileBytes);
   let handedOff = false;
   try {
     const sha256 = sha256Of(src.bytes);

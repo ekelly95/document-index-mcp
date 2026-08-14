@@ -30,7 +30,15 @@ jobs:
     permissions:
       contents: write
     steps:
+      # persist-credentials: false matters more here than anywhere in ci.yml.
+      # This job holds `contents: write`, and checkout would otherwise leave
+      # that token in .git/config for the whole of it — including `pnpm install`
+      # (which runs onnxruntime-node's install script) and `pnpm test`. `gh`
+      # below reads GH_TOKEN from the environment and never touches the git
+      # credential, so nothing is given up by removing it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -39,7 +47,9 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
-          key: bge-small-en-v1.5-${{ runner.os }}
+          # Must match ci.yml's key exactly, suffix included — see the comment
+          # there for why the suffix exists.
+          key: bge-small-en-v1.5-tar7-${{ runner.os }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -117,6 +127,18 @@ jobs:
       # The release notes are the changelog entry, so a version with no entry
       # cannot be released. That is the point: it is the only thing forcing the
       # changelog to stay current.
+      #
+      # No asset is attached, deliberately. The archive above is a TEST — it
+      # proves the `files` allowlist is right and that the package starts
+      # outside the development checkout — and it stops being one the moment it
+      # is published, because installing it is not a route this project has
+      # made safe. `npm install`ing that tarball resolves fastembed's own
+      # `tar: ^6.2.0` rather than the pinned 7, and tar 6.2.1 answers to
+      # GHSA-34x7-hfp2-rc4v (arbitrary file creation and overwrite via hardlink
+      # path traversal). That tar is what unpacks the 130MB model, which is
+      # fetched with no integrity check — so the two limits SECURITY.md records
+      # are not independent, and publishing the tarball is what joins them.
+      # Distribution is by cloning; the release is the tag and the notes.
       - name: Publish the release, with its changelog entry as the notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,5 +151,4 @@ jobs:
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --notes "$notes" \
-            document-index-mcp-*.tgz
+            --notes "$notes"

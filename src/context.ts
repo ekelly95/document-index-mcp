@@ -9,6 +9,7 @@ import {
 import { createIngestQueue, type IngestQueue } from "./ingest/queue.js";
 import { recoverInterrupted } from "./db/documentsRepo.js";
 import { log } from "./log.js";
+import { redactPathsInReplies } from "./tools/result.js";
 import {
   Embedder,
   EMBEDDING_DIM,
@@ -59,6 +60,14 @@ export function createContext(
   config: ServerConfig,
   overrides: ContextOptions = {},
 ): AppContext {
+  // First of all, and before anything can fail: an error thrown below is
+  // reported by the caller, and its message carries these paths.
+  redactPathsInReplies([
+    { path: config.libraryRoot, as: "<library>" },
+    { path: config.dbPath, as: "<index>" },
+    { path: config.modelCacheDir, as: "<models>" },
+  ]);
+
   // Before the database is even opened, and — for the server — non-fatally: a
   // host that starts two processes per server, as Claude Desktop does, makes
   // losing this race routine rather than exceptional. The loser is a peer, not

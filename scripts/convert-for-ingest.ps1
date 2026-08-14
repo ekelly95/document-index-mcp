@@ -49,6 +49,8 @@ $ErrorActionPreference = "Stop"
 $wdFormatXMLDocument = 16
 $ppSaveAsPDF = 32
 $ppPlaceholderBody = 2
+$msoAutomationSecurityForceDisable = 3
+$ppAlertsNone = 1
 
 if (-not (Test-Path $Path)) { throw "Not found: $Path" }
 $item = Get-Item $Path
@@ -125,6 +127,29 @@ $docs = @($files | Where-Object Extension -eq ".doc")
 if ($docs) {
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
+
+    <#
+    These files are untrusted -- SECURITY.md says a Word file "may have come
+    from anywhere" -- and this is the one place the project hands one to a
+    program that will run what is inside it. Opening a .doc is exactly what
+    AutoOpen and AutoExec macros are for.
+
+    AutomationSecurity is the guard, and it has to be set before Open. Its
+    default under automation is msoAutomationSecurityLow -- measured as 1 on a
+    real install, not inferred -- which enables every macro without prompting,
+    and is a weaker position than the same file opened by double-clicking it.
+    ForceDisable means macros never run, which costs nothing here because SaveAs
+    needs none of them.
+
+    UpdateLinksAtOpen stops a linked or DDE field reaching out to whatever it
+    names the moment the file opens. DisplayAlerts is not cosmetic either: with
+    Visible = $false a password prompt is a dialog nobody can see or answer, so
+    the script would hang rather than fail.
+    #>
+    $priorWordSecurity = $word.AutomationSecurity
+    $word.AutomationSecurity = $msoAutomationSecurityForceDisable
+    $word.Options.UpdateLinksAtOpen = $false
+    $word.DisplayAlerts = 0
     try {
         foreach ($f in $docs) {
             $target = [System.IO.Path]::ChangeExtension($f.FullName, ".docx")
@@ -134,6 +159,9 @@ if ($docs) {
             $converted += $target
         }
     } finally {
+        # Restored because New-Object may have attached to a Word the user
+        # already had open rather than starting a fresh one.
+        if ($null -ne $priorWordSecurity) { $word.AutomationSecurity = $priorWordSecurity }
         $word.Quit()
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($word)
     }
@@ -142,6 +170,11 @@ if ($docs) {
 $decks = @($files | Where-Object { $_.Extension -in ".ppt", ".pptx" })
 if ($decks) {
     $powerpoint = New-Object -ComObject PowerPoint.Application
+    # Same reasoning as Word above: a .ppt carries VBA too, and the Trust
+    # Center is not a setting this script can see.
+    $priorPptSecurity = $powerpoint.AutomationSecurity
+    $powerpoint.AutomationSecurity = $msoAutomationSecurityForceDisable
+    $powerpoint.DisplayAlerts = $ppAlertsNone
     try {
         foreach ($f in $decks) {
             $pdfTarget = [System.IO.Path]::ChangeExtension($f.FullName, ".pdf")
@@ -218,6 +251,7 @@ if ($decks) {
             } finally { $pres.Close() }
         }
     } finally {
+        if ($null -ne $priorPptSecurity) { $powerpoint.AutomationSecurity = $priorPptSecurity }
         $powerpoint.Quit()
         [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($powerpoint)
     }

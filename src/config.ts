@@ -9,6 +9,16 @@ import { DEFAULT_INGEST_CONCURRENCY } from "./ingest/queue.js";
  */
 export const DEFAULT_OCR_WORKERS = 2;
 
+/**
+ * The largest file the server will read, in megabytes.
+ *
+ * Generous on purpose: the biggest thing measured against this project is a
+ * 408-page scan, and the ceiling exists to stop an unbounded read rather than
+ * to express an opinion about documents. A library holding something larger
+ * raises it and knows why.
+ */
+export const DEFAULT_MAX_FILE_MB = 512;
+
 export interface ServerConfig {
   /** Jail root. Every addressable source file lives under this directory. */
   libraryRoot: string;
@@ -18,6 +28,8 @@ export interface ServerConfig {
   modelCacheDir: string;
   /** Documents indexed at once, process-wide. See `ingest/queue.ts`. */
   ingestConcurrency: number;
+  /** Largest file `openSource` will read, in bytes. */
+  maxFileBytes: number;
   /** "auto" routes scanned PDFs through OCR; "off" restores the old refusal. */
   ocrMode: "auto" | "off";
   /** Tesseract language(s), e.g. "eng" or "deu+eng". */
@@ -92,6 +104,16 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
   }
   const ingestConcurrency = Number.isInteger(parsed) ? parsed : DEFAULT_INGEST_CONCURRENCY;
 
+  const rawMaxFileMb = flags.get("max-file-mb") ?? process.env["DOCUMENT_INDEX_MAX_FILE_MB"];
+  const parsedMaxFileMb = rawMaxFileMb === undefined ? NaN : Number(rawMaxFileMb);
+  if (rawMaxFileMb !== undefined && (!Number.isInteger(parsedMaxFileMb) || parsedMaxFileMb < 1)) {
+    throw new Error(
+      `Invalid max file size ${JSON.stringify(rawMaxFileMb)}: expected an integer >= 1 (megabytes).`,
+    );
+  }
+  const maxFileBytes =
+    (Number.isInteger(parsedMaxFileMb) ? parsedMaxFileMb : DEFAULT_MAX_FILE_MB) * 1_000_000;
+
   const rawOcr = flags.get("ocr") ?? process.env["DOCUMENT_INDEX_OCR"];
   if (rawOcr !== undefined && rawOcr !== "auto" && rawOcr !== "off") {
     throw new Error(
@@ -148,6 +170,7 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     dbPath,
     modelCacheDir,
     ingestConcurrency,
+    maxFileBytes,
     ocrMode,
     ocrLang,
     ocrWorkers,

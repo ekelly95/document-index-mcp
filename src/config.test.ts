@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_OCR_WORKERS, loadConfig } from "./config.js";
+import { DEFAULT_MAX_FILE_MB, DEFAULT_OCR_WORKERS, loadConfig } from "./config.js";
 
 function tempLibrary(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "document-index-mcp-config-"));
@@ -82,6 +82,34 @@ test("an OCR language that is not a plain code is refused", () => {
     assert.throws(
       () => loadConfig([`--library=${lib}`, `--ocr-lang=${bad}`]),
       /Invalid OCR language/,
+    );
+  }
+});
+
+test("the file-size ceiling defaults, and takes a flag or an env var in megabytes", () => {
+  const lib = tempLibrary();
+  assert.equal(loadConfig([`--library=${lib}`]).maxFileBytes, DEFAULT_MAX_FILE_MB * 1_000_000);
+  assert.equal(loadConfig([`--library=${lib}`, "--max-file-mb=64"]).maxFileBytes, 64_000_000);
+
+  process.env["DOCUMENT_INDEX_MAX_FILE_MB"] = "32";
+  try {
+    assert.equal(loadConfig([`--library=${lib}`]).maxFileBytes, 32_000_000);
+    assert.equal(
+      loadConfig([`--library=${lib}`, "--max-file-mb=8"]).maxFileBytes,
+      8_000_000,
+      "the flag should win over the environment",
+    );
+  } finally {
+    delete process.env["DOCUMENT_INDEX_MAX_FILE_MB"];
+  }
+});
+
+test("a fractional or sub-one file-size ceiling is refused", () => {
+  const lib = tempLibrary();
+  for (const bad of ["0", "1.5", "64mb", "-1"]) {
+    assert.throws(
+      () => loadConfig([`--library=${lib}`, `--max-file-mb=${bad}`]),
+      /Invalid max file size/,
     );
   }
 });

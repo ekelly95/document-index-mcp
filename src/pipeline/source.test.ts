@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sourceFromBytes } from "./source.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { FileTooLargeError, openSource, sourceFromBytes } from "./source.js";
 
 /**
  * The memoisation that collapses three reads and three parses into one.
@@ -101,4 +104,35 @@ test("text is decoded once and reused", () => {
   const src = sourceFromBytes("a.md", bytesOf("# Heading\n\nBody.\n"));
   assert.equal(src.text(), "# Heading\n\nBody.\n");
   assert.equal(src.text(), src.text());
+});
+
+/**
+ * The size ceiling. Checked with a stat before the read, because everything
+ * after it is unbounded — the file becomes resident and `text()` decodes a
+ * second copy on top.
+ */
+test("a file over the ceiling is refused before it is read", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "docindex-size-"));
+  try {
+    const file = path.join(dir, "big.md");
+    await fs.writeFile(file, "x".repeat(4096));
+
+    await assert.rejects(() => openSource(file, 1024), FileTooLargeError);
+
+    // Both numbers, so the caller can tell whether the file or the setting is
+    // the thing to change.
+    await assert.rejects(() => openSource(file, 1024), /4096 bytes.*1024 bytes/);
+    await assert.rejects(() => openSource(file, 1024), /max-file-mb/);
+
+    // The boundary is inclusive, and no ceiling means no stat and no limit.
+    const atLimit = await openSource(file, 4096);
+    assert.equal(atLimit.bytes.length, 4096);
+    await atLimit.close();
+
+    const unbounded = await openSource(file);
+    assert.equal(unbounded.bytes.length, 4096);
+    await unbounded.close();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });

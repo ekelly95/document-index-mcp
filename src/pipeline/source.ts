@@ -99,8 +99,40 @@ function asPlainBytes(buf: Uint8Array): Uint8Array {
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
-/** Read a file once. The caller must `close()` it. */
-export async function openSource(absPath: string): Promise<DocumentSource> {
+export class FileTooLargeError extends Error {
+  override readonly name = "FileTooLargeError";
+}
+
+/** Bytes as something a person reads, at both ends of the range. */
+const describeSize = (n: number): string =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} MB` : `${n} bytes`;
+
+/**
+ * Read a file once. The caller must `close()` it.
+ *
+ * `maxBytes` is checked with a stat first, because everything this function
+ * does after it is unbounded: the whole file becomes resident, and for
+ * Markdown and text `text()` then decodes it into a JS string as well, so the
+ * real peak is a multiple of the file rather than the file. SECURITY.md invites
+ * reports of "any input that causes unbounded resource use", and until this
+ * existed the only ceiling was Node's own ~2 GiB readFile limit — which is a
+ * crash, not a refusal.
+ *
+ * Omitting it means unbounded, which is right for the probe scripts and the
+ * tests and wrong for the server. `runner.ts` passes the configured ceiling.
+ */
+export async function openSource(absPath: string, maxBytes?: number): Promise<DocumentSource> {
+  if (maxBytes !== undefined) {
+    const { size } = await fs.stat(absPath);
+    if (size > maxBytes) {
+      // Names both numbers, because "too large" without the limit leaves the
+      // caller unable to tell whether the file or the setting is the problem.
+      throw new FileTooLargeError(
+        `File is ${describeSize(size)}, over the ${describeSize(maxBytes)} limit. ` +
+          `Raise --max-file-mb (or DOCUMENT_INDEX_MAX_FILE_MB) to index it.`,
+      );
+    }
+  }
   return new FileSource(absPath, asPlainBytes(await fs.readFile(absPath)));
 }
 
