@@ -24,6 +24,12 @@ export interface ServerConfig {
   ocrLang: string;
   /** Concurrent OCR workers; pages in flight at once during a scan ingest. */
   ocrWorkers: number;
+  /**
+   * Directory holding the tesseract traineddata, instead of the jsDelivr CDN.
+   * Absent means the CDN, which is the default: the first scanned page fetches
+   * ~3MB and the worker caches it under `<models>/tesseract/` thereafter.
+   */
+  ocrLangPath?: string;
 }
 
 /**
@@ -113,5 +119,38 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
   }
   const ocrWorkers = Number.isInteger(parsedWorkers) ? parsedWorkers : DEFAULT_OCR_WORKERS;
 
-  return { libraryRoot, dbPath, modelCacheDir, ingestConcurrency, ocrMode, ocrLang, ocrWorkers };
+  const rawLangPath =
+    flags.get("ocr-lang-path") ?? process.env["DOCUMENT_INDEX_OCR_LANG_PATH"];
+  let ocrLangPath: string | undefined;
+  if (rawLangPath !== undefined) {
+    // Not run through security/paths.ts. That jail wants a library-relative
+    // path with a document extension; this is a directory deliberately outside
+    // the library, supplied by whoever writes the host config — the same trust
+    // level as --library and --models, neither of which is jailed either.
+    //
+    // It is checked eagerly all the same. The alternative is a worker rejecting
+    // with ENOENT at the first scanned page, which can be many minutes into an
+    // ingest, and reporting it as an OCR failure rather than a typo.
+    ocrLangPath = path.resolve(rawLangPath);
+    let langStat: fs.Stats;
+    try {
+      langStat = fs.statSync(ocrLangPath);
+    } catch {
+      throw new Error(`OCR language path does not exist: ${ocrLangPath}`);
+    }
+    if (!langStat.isDirectory()) {
+      throw new Error(`OCR language path is not a directory: ${ocrLangPath}`);
+    }
+  }
+
+  return {
+    libraryRoot,
+    dbPath,
+    modelCacheDir,
+    ingestConcurrency,
+    ocrMode,
+    ocrLang,
+    ocrWorkers,
+    ...(ocrLangPath ? { ocrLangPath } : {}),
+  };
 }

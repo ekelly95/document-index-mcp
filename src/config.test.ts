@@ -95,3 +95,49 @@ test("a fractional or sub-one OCR worker count is refused", () => {
     );
   }
 });
+
+test("the OCR language path is absent by default, and resolved when set", () => {
+  const lib = tempLibrary();
+  assert.equal(loadConfig([`--library=${lib}`]).ocrLangPath, undefined);
+
+  const langDir = tempLibrary();
+  const config = loadConfig([`--library=${lib}`, `--ocr-lang-path=${langDir}`]);
+  assert.equal(config.ocrLangPath, path.resolve(langDir));
+});
+
+test("the OCR language path honours the env var, and the flag wins over it", () => {
+  const lib = tempLibrary();
+  const fromEnvDir = tempLibrary();
+  const fromFlagDir = tempLibrary();
+  process.env["DOCUMENT_INDEX_OCR_LANG_PATH"] = fromEnvDir;
+  try {
+    assert.equal(
+      loadConfig([`--library=${lib}`]).ocrLangPath,
+      path.resolve(fromEnvDir),
+    );
+    assert.equal(
+      loadConfig([`--library=${lib}`, `--ocr-lang-path=${fromFlagDir}`]).ocrLangPath,
+      path.resolve(fromFlagDir),
+    );
+  } finally {
+    delete process.env["DOCUMENT_INDEX_OCR_LANG_PATH"];
+  }
+});
+
+test("an OCR language path that is missing or not a directory is refused", () => {
+  const lib = tempLibrary();
+  // Checked here rather than left to the worker: the failure would otherwise
+  // surface as an OCR error at the first scanned page, possibly many minutes
+  // into an ingest, and look like a tesseract problem instead of a typo.
+  assert.throws(
+    () => loadConfig([`--library=${lib}`, `--ocr-lang-path=${path.join(lib, "nope")}`]),
+    /OCR language path does not exist/,
+  );
+
+  const file = path.join(lib, "eng.traineddata");
+  fs.writeFileSync(file, "not a directory");
+  assert.throws(
+    () => loadConfig([`--library=${lib}`, `--ocr-lang-path=${file}`]),
+    /OCR language path is not a directory/,
+  );
+});

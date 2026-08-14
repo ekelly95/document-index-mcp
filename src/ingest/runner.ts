@@ -227,6 +227,7 @@ export async function beginIngest(
         lang: ctx.config.ocrLang,
         workers: ctx.config.ocrWorkers,
         cacheDir: ctx.config.modelCacheDir,
+        ...(ctx.config.ocrLangPath ? { langPath: ctx.config.ocrLangPath } : {}),
       },
     });
     const meta = await route.parser.metadata(src);
