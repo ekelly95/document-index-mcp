@@ -78,7 +78,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.1.0",
     "@tesseract.js-data/eng": "^1.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/mdast": "^4.0.4",
