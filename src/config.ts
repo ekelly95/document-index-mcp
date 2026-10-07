@@ -24,7 +24,7 @@ export interface ServerConfig {
   libraryRoot: string;
   /** Single SQLite file holding documents, chunks, FTS index and vectors. */
   dbPath: string;
-  /** Where fastembed caches the ONNX model (~130MB, downloaded once). */
+  /** Where fastembed caches the ONNX model (~65MB, downloaded once). */
   modelCacheDir: string;
   /** Documents indexed at once, process-wide. See `ingest/queue.ts`. */
   ingestConcurrency: number;

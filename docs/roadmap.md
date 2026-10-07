@@ -77,8 +77,8 @@ assertions still mean what they say. That file went 11.1s to 1.7s and the suite 
 the long pole is now real OCR, which is worth what it costs.
 
 `DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs it against the real model. CI does that on one job rather
-than six, and the release workflow always does — a stub cannot stand in for the download, the tar
-extract the fastembed patch touches, or ONNX loading, and those breaking means every new user's
+than six, and the release workflow always does — a stub cannot stand in for the download, the
+pinned-hash check, or ONNX loading, and those breaking means every new user's
 first ingest fails.
 
 **Cross-process is now closed** — it used to be the one real gap. `recoverInterrupted` reset *every*

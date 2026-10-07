@@ -59,15 +59,16 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "^2.0.0",
-    "@napi-rs/canvas": "^1.0.3",
+    "@anush008/tokenizers": "0.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "@napi-rs/canvas": "^1.0.10",
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^13.0.3",
-    "fastembed": "^2.1.0",
+    "fastembed": "^3.0.0",
     "fflate": "^0.8.3",
     "linkedom": "^0.18.13",
     "mdast-util-to-string": "^4.0.0",
-    "pdfjs-dist": "^6.2.108",
+    "pdfjs-dist": "^6.4.299",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
@@ -75,10 +76,10 @@
     "tesseract.js": "^7.0.0",
     "ulid": "^3.0.2",
     "unified": "^11.0.5",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@tesseract.js-data/eng": "^1.0.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/mdast": "^4.0.4",

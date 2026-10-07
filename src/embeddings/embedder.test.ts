@@ -1,13 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { FlagEmbedding } from "fastembed";
-import { composeEmbedInput, Embedder, type InitEmbedding } from "./embedder.js";
+import {
+  composeEmbedInput,
+  Embedder,
+  MODEL_FILE_SHA256,
+  ModelIntegrityError,
+  verifyModelFiles,
+  type InitEmbedding,
+} from "./embedder.js";
 
 /**
- * The first run downloads ~130MB from Google Cloud Storage, so init is the one
- * call in this module that routinely fails for reasons that pass. These tests use the
- * injected init seam rather than the network, which is the whole point: a test
- * that a failed download can be retried must not need a download.
+ * Init downloads the model on first run, so it is the one call here that
+ * routinely fails for reasons that pass. These tests use the injected init
+ * seam: a test that a failed download can be retried must not need a download.
  */
 
 const CHUNK = { text: "body", sectionPath: ["3.2 Sampling"], overlapPrefix: null };
@@ -25,7 +34,7 @@ test("a failed init is not cached, so the next call can retry", async () => {
   let attempts = 0;
   const flaky: InitEmbedding = async () => {
     attempts++;
-    if (attempts === 1) throw new Error("getaddrinfo ENOTFOUND storage.googleapis.com");
+    if (attempts === 1) throw new Error("getaddrinfo ENOTFOUND huggingface.co");
     return stubModel();
   };
 
@@ -85,6 +94,26 @@ test("the document title leads the embedded input when there is one", () => {
   assert.ok(input.startsWith("Deep Residual Learning for Image Recognition"));
   assert.ok(input.includes("4. Experiments"));
   assert.ok(input.endsWith("Deeper networks are harder to optimise."));
+});
+
+test("a model file that does not match its pinned hash is refused", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "document-index-model-"));
+  try {
+    for (const name of Object.keys(MODEL_FILE_SHA256)) {
+      fs.writeFileSync(path.join(dir, name), "not the model");
+    }
+    await assert.rejects(verifyModelFiles(dir), (err: unknown) => {
+      assert.ok(err instanceof ModelIntegrityError);
+      assert.match(err.message, /does not match its pinned SHA-256/);
+      return true;
+    });
+
+    fs.rmSync(path.join(dir, "tokenizer.json"));
+    fs.writeFileSync(path.join(dir, "model_optimized.onnx"), "still not the model");
+    await assert.rejects(verifyModelFiles(dir), ModelIntegrityError);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("an absent title changes nothing about the composed input", () => {

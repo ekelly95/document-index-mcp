@@ -95,9 +95,15 @@ DOCUMENT_INDEX_LIBRARY_PATH = '/absolute/path/to/your/library'
 
 ### First run
 
-The first ingest downloads the embedding model (`bge-small-en-v1.5`, ~130 MB) into
-`<library>/.document-index/models`, once. Searching is entirely local. [Privacy](#privacy) has the
-whole network story — it is two downloads and nothing else.
+The first ingest downloads the embedding model (`bge-small-en-v1.5`, ~65 MB) into
+`<library>/.document-index/models`, once, and checks it against a pinned SHA-256. Searching is
+entirely local. [Privacy](#privacy) has the whole network story — it is two downloads and nothing
+else.
+
+If the library sits in a synced folder (OneDrive, Dropbox, iCloud), put the index and model cache
+outside it with `DOCUMENT_INDEX_DB_PATH` and `DOCUMENT_INDEX_MODEL_CACHE` (or `--db=` / `--models=`).
+A sync client uploading SQLite's `-wal` and `-shm` files mid-write is a conflict waiting to happen,
+and nobody needs the model in their cloud storage.
 
 For a whole library at once, use the bulk CLI rather than ingesting file by file in chat:
 
@@ -197,15 +203,15 @@ client you deliberately connected.
 The server makes exactly two outbound requests, both one-time downloads of its own machinery, neither
 carrying any part of your documents:
 
-- the embedding model (~130 MB) from `storage.googleapis.com/qdrant-fastembed`, on first ingest;
+- the embedding model (~65 MB) from `huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q`, on first
+  ingest;
 - OCR language data (~3 MB per language) from `cdn.jsdelivr.net`, on the first *scanned* PDF only. A
   library with no scans never makes this one, and `--ocr-lang-path=<dir>` removes it entirely by
   pointing at your own copy from
   [tessdata_fast](https://github.com/tesseract-ocr/tessdata_fast).
 
-Both are cached and neither repeats. **Neither is integrity-checked** — no checksum, no signature, on
-either one; only the transport is trusted. That is recorded in [SECURITY.md](SECURITY.md) alongside
-what it does and does not imply.
+Both are cached and neither repeats. The model is checked against a pinned SHA-256 every time it is
+loaded; the OCR language data is not checked. [SECURITY.md](SECURITY.md) has the details.
 
 The library root is a jail: paths outside it are refused, symlinks that escape it are refused, and an
 extension allowlist keeps files like `.env` from being addressable at all. Results expose a
