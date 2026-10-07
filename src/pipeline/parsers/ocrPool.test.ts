@@ -4,7 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { acquireOcrScheduler, disposeOcrPool, type OcrPoolConfig } from "./ocrPool.js";
+import {
+  acquireOcrScheduler,
+  disposeOcrPool,
+  holdOcrPool,
+  ocrPoolActive,
+  setOcrPoolIdleMs,
+  type OcrPoolConfig,
+} from "./ocrPool.js";
 import { renderScanJpeg } from "../../testing/scanImage.js";
 import { testLangPath } from "../../testing/tessdata.js";
 
@@ -47,6 +54,48 @@ test("dispose then re-acquire builds a working pool again", async () => {
   const image = renderScanJpeg(["Lantern"]);
   const result = await scheduler.addJob("recognize", image.jpeg, {}, { text: true });
   assert.match(result.data.text, /lantern/i);
+});
+
+test("a failed build is not cached, so a later scan can retry", async () => {
+  await disposeOcrPool();
+  const emptyLangDir = fs.mkdtempSync(path.join(os.tmpdir(), "document-index-mcp-nolang-"));
+  const retryCache = fs.mkdtempSync(path.join(os.tmpdir(), "document-index-mcp-ocr-retry-"));
+  const cfg: OcrPoolConfig = { lang: "eng", workers: 1, cacheDir: retryCache, langPath: emptyLangDir };
+  try {
+    await assert.rejects(acquireOcrScheduler(cfg));
+    assert.equal(ocrPoolActive(), false, "the rejected build stayed cached");
+
+    // The language data turns up; the same configuration must now work.
+    fs.copyFileSync(
+      path.join(testLangPath(), "eng.traineddata.gz"),
+      path.join(emptyLangDir, "eng.traineddata.gz"),
+    );
+    const scheduler = await acquireOcrScheduler(cfg);
+    const result = await scheduler.addJob("recognize", renderScanJpeg(["Retry"]).jpeg, {}, { text: true });
+    assert.match(result.data.text, /retry/i);
+  } finally {
+    await disposeOcrPool();
+    fs.rmSync(emptyLangDir, { recursive: true, force: true });
+    fs.rmSync(retryCache, { recursive: true, force: true });
+  }
+});
+
+test("an unheld pool is disposed after the idle window, a held one is not", async () => {
+  setOcrPoolIdleMs(30);
+  try {
+    const release = holdOcrPool();
+    await acquireOcrScheduler(TEST_POOL);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(ocrPoolActive(), true, "a held pool was disposed");
+
+    release();
+    release(); // idempotent
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(ocrPoolActive(), false, "an idle pool was kept");
+  } finally {
+    setOcrPoolIdleMs(5 * 60_000);
+    await disposeOcrPool();
+  }
 });
 
 test("a language directory holding plain, ungzipped traineddata works", async () => {

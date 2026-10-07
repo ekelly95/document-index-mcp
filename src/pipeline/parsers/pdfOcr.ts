@@ -18,6 +18,7 @@ import { bookmarkTrails, joinWrapped } from "./pdfFast.js";
 import { usableTextLayer } from "./pdfProbe.js";
 import {
   acquireOcrScheduler,
+  holdOcrPool,
   OCR_RENDER_DPI,
   type OcrScheduler,
 } from "./ocrPool.js";
@@ -83,34 +84,37 @@ export class PdfOcrParser implements DocumentParser {
       trails.push(trail);
     }
 
-    const scheduler = await acquireOcrScheduler({
-      lang: this.opts.lang,
-      workers: this.opts.workers,
-      cacheDir: this.opts.cacheDir,
-      ...(this.opts.langPath ? { langPath: this.opts.langPath } : {}),
-    });
+    const release = holdOcrPool();
+    try {
+      const scheduler = await acquireOcrScheduler({
+        lang: this.opts.lang,
+        workers: this.opts.workers,
+        cacheDir: this.opts.cacheDir,
+        ...(this.opts.langPath ? { langPath: this.opts.langPath } : {}),
+      });
 
-    // Keep up to `workers` pages in flight — rasterisation on this thread,
-    // recognition on the pool's worker threads — but yield strictly in page
-    // order. This window is what makes --ocr-workers a throughput lever while
-    // ingest concurrency stays at one document.
-    const window: Promise<PageBlock[]>[] = [];
-    let nextToStart = 1;
-    const start = () => {
-      if (nextToStart <= doc.numPages) {
-        window.push(this.processPage(doc, nextToStart++, labels, scheduler));
-      }
-    };
-    for (let i = 0; i < Math.max(1, this.opts.workers); i++) start();
+      // Up to `workers` pages in flight — rasterised here, recognised on the
+      // pool's threads — yielded strictly in page order.
+      const window: Promise<PageBlock[]>[] = [];
+      let nextToStart = 1;
+      const start = () => {
+        if (nextToStart <= doc.numPages) {
+          window.push(this.processPage(doc, nextToStart++, labels, scheduler));
+        }
+      };
+      for (let i = 0; i < Math.max(1, this.opts.workers); i++) start();
 
-    let pageIndex = 0;
-    while (window.length > 0) {
-      const blocks = await window.shift()!;
-      start();
-      for (const block of blocks) {
-        yield { ...block, sectionPath: trails[pageIndex] ?? [] };
+      let pageIndex = 0;
+      while (window.length > 0) {
+        const blocks = await window.shift()!;
+        start();
+        for (const block of blocks) {
+          yield { ...block, sectionPath: trails[pageIndex] ?? [] };
+        }
+        pageIndex++;
       }
-      pageIndex++;
+    } finally {
+      release();
     }
   }
 
