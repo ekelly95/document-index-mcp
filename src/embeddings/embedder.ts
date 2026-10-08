@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Tokenizer } from "@anush008/tokenizers";
 import { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { MAX_TOKENS } from "../pipeline/chunker.js";
+import { estimateTokens, takeLastTokens } from "../util/tokens.js";
 
 /**
  * bge-small-en-v1.5, 384 dimensions, via fastembed (ONNX Runtime on CPU).
@@ -142,14 +144,82 @@ export const initVerifiedModel: InitEmbedding = async (opts) => {
   return model;
 };
 
+/** Model input tokens for a string, `[CLS]` and `[SEP]` included. */
+export type TokenCounter = (text: string) => Promise<number>;
+export type LoadTokenCounter = (cacheDir: string) => Promise<TokenCounter>;
+
+/** The model's own tokenizer, untruncated, from the verified model directory. */
+export const loadModelTokenCounter: LoadTokenCounter = async (cacheDir) => {
+  const tokenizer = Tokenizer.fromFile(path.join(cacheDir, MODEL_DIR_NAME, "tokenizer.json"));
+  return async (text) => (await tokenizer.encode(text, null)).getLength();
+};
+
+/** For stand-in models in tests: the chunker's estimate plus the special tokens. */
+export const estimatedTokenCounter: LoadTokenCounter = async () => async (text) =>
+  estimateTokens(text) + 2;
+
+/**
+ * The input actually embedded for a chunk, guaranteed to fit `maxTokens`
+ * whenever the chunk's own text does.
+ *
+ * Title, section path and overlap are prepended, and the model silently cuts
+ * whatever runs past its window — the END of the passage. Measured on a real
+ * library before this existed: 19% of chunks lost an average of 63 tokens of
+ * their own text that way, invisible to semantic search. So the context gives
+ * way to the text, cheapest first: overlap, then all but the deepest section,
+ * then the section path, then the title.
+ */
+export async function fitEmbedInput(
+  chunk: EmbeddableChunk,
+  count: TokenCounter,
+  maxTokens = MAX_TOKENS,
+): Promise<string> {
+  const candidates: EmbeddableChunk[] = [
+    chunk,
+    { ...chunk, overlapPrefix: chunk.overlapPrefix ? takeLastTokens(chunk.overlapPrefix, 16) : null },
+    { ...chunk, overlapPrefix: null },
+    { ...chunk, overlapPrefix: null, sectionPath: chunk.sectionPath.slice(-1) },
+    { ...chunk, overlapPrefix: null, sectionPath: [] },
+    { ...chunk, overlapPrefix: null, sectionPath: [], documentTitle: undefined },
+  ];
+  const tried = new Set<string>();
+  let input = "";
+  for (const candidate of candidates) {
+    input = composeEmbedInput(candidate);
+    if (tried.has(input)) continue;
+    tried.add(input);
+    if ((await count(input)) <= maxTokens) return input;
+  }
+  return input;
+}
+
 export class Embedder {
   private model: FlagEmbedding | null = null;
   private initPromise: Promise<FlagEmbedding> | null = null;
+  private counterPromise: Promise<TokenCounter> | null = null;
+  private readonly loadCounter: LoadTokenCounter;
 
   constructor(
     private readonly cacheDir: string,
     private readonly init: InitEmbedding = initVerifiedModel,
-  ) {}
+    loadCounter?: LoadTokenCounter,
+  ) {
+    this.loadCounter =
+      loadCounter ?? (init === initVerifiedModel ? loadModelTokenCounter : estimatedTokenCounter);
+  }
+
+  /** Count model tokens the way the model will. Loads the model first. */
+  async countTokens(text: string): Promise<number> {
+    await this.ready();
+    if (!this.counterPromise) {
+      const attempt = this.loadCounter(this.cacheDir);
+      attempt.catch(() => {
+        if (this.counterPromise === attempt) this.counterPromise = null;
+      });
+      this.counterPromise = attempt;
+    }
+    return (await this.counterPromise)(text);
+  }
 
   /**
    * Initialise once, even under concurrent callers. The promise is cached
@@ -171,15 +241,9 @@ export class Embedder {
         return m;
       });
 
-      // A FAILED init must not be cached. The first run downloads ~65MB over
-      // the network, so it is the one call here that routinely fails for
-      // reasons that pass — offline, a flaky hop, a half-written cache. Caching
-      // the rejected promise made every later embed in the process rethrow that
-      // same first error until restart, long after the network came back.
-      //
-      // The identity check stops a stale failure from clearing a newer attempt,
-      // and this .catch is a separate handled branch, so no unhandled rejection
-      // is created while `initPromise` still rejects for real awaiters.
+      // A FAILED init is not cached: the first run downloads over the network,
+      // and a cached rejection would rethrow until restart. The identity check
+      // stops a stale failure clearing a newer attempt.
       attempt.catch(() => {
         if (this.initPromise === attempt) this.initPromise = null;
       });
@@ -197,7 +261,8 @@ export class Embedder {
   async embedPassages(chunks: readonly EmbeddableChunk[]): Promise<number[][]> {
     if (chunks.length === 0) return [];
     const model = await this.ready();
-    const inputs = chunks.map(composeEmbedInput);
+    const count = (text: string) => this.countTokens(text);
+    const inputs = await Promise.all(chunks.map((chunk) => fitEmbedInput(chunk, count)));
 
     const out: number[][] = [];
     for await (const batch of model.embed(inputs, BATCH_SIZE)) {

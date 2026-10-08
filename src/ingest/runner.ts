@@ -20,7 +20,7 @@ import {
 } from "../db/documentsRepo.js";
 import { insertChunks, type InsertableChunk } from "../db/chunksRepo.js";
 import { EMBEDDING_MODEL_NAME } from "../embeddings/embedder.js";
-import { chunkBlocks, type DraftChunk } from "../pipeline/chunker.js";
+import { chunkBlocks, fitToBudget, type DraftChunk } from "../pipeline/chunker.js";
 import { OutlineBuilder } from "../pipeline/outline.js";
 import { routeDocument, type Route } from "../pipeline/router.js";
 import { UnsupportedFormatError } from "../pipeline/ir.js";
@@ -549,9 +549,8 @@ async function indexDocument(
   const lease = setInterval(() => renewLease(ctx.db, documentId), LEASE_RENEW_INTERVAL_MS);
   lease.unref();
   try {
-    for await (const chunk of chunkBlocks(route.parser.parse(src), {
-      scheme: meta.locatorScheme,
-    })) {
+    const drafts = chunkBlocks(route.parser.parse(src), { scheme: meta.locatorScheme });
+    for await (const chunk of fitToBudget(drafts, (text) => ctx.embedder.countTokens(text))) {
       outline.add(seq, chunk.sectionPath, chunk.locator);
       locators.add(chunk.locator.value);
       batch.push(chunk);

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chunkBlocks, MAX_TOKENS, type DraftChunk } from "./chunker.js";
+import { chunkBlocks, fitToBudget, MAX_TOKENS, type DraftChunk } from "./chunker.js";
 import type { BlockKind, DocBlock, LocatorType } from "./ir.js";
 import { estimateTokens } from "../util/tokens.js";
 
@@ -228,4 +228,53 @@ test("prose chunks stay within the token cap", async () => {
 
 test("an empty stream produces no chunks", async () => {
   assert.deepEqual(await collect([]), []);
+});
+
+test("fitToBudget splits a chunk the real tokenizer says is too long, within its locator", async () => {
+  const sentence = "Creatine monohydrate at 0.3 g/kg/day saturates stores within a week. ";
+  const draft: DraftChunk = {
+    kind: "text",
+    locator: { type: "page", value: "7", ordinal: 6 },
+    sectionPath: ["Ergogenic Aids"],
+    bbox: null,
+    text: sentence.repeat(20).trim(),
+    overlapPrefix: "the previous page ended here.",
+    tokenCount: 0,
+  };
+  // A tokenizer that counts twice what the estimate does, as numeric text can.
+  const harsh = async (t: string) => estimateTokens(t) * 2;
+  async function* one() {
+    yield draft;
+  }
+
+  const out: DraftChunk[] = [];
+  for await (const c of fitToBudget(one(), harsh, 200)) out.push(c);
+
+  assert.ok(out.length > 1, "the chunk was not split");
+  for (const c of out) {
+    assert.ok((await harsh(c.text)) <= 200, `a part is still over budget: ${await harsh(c.text)}`);
+    assert.deepEqual(c.locator, draft.locator);
+    assert.deepEqual(c.sectionPath, draft.sectionPath);
+  }
+  assert.equal(out[0]!.overlapPrefix, draft.overlapPrefix);
+  assert.ok(out[1]!.overlapPrefix && out[0]!.text.endsWith(out[1]!.overlapPrefix.trim()));
+  assert.equal(out.map((c) => c.text).join(" "), draft.text);
+});
+
+test("fitToBudget passes chunks that fit through untouched", async () => {
+  const draft: DraftChunk = {
+    kind: "table",
+    locator: { type: "page", value: "1", ordinal: 0 },
+    sectionPath: [],
+    bbox: null,
+    text: "| a | b |\n| --- | --- |\n| 1 | 2 |",
+    overlapPrefix: null,
+    tokenCount: 9,
+  };
+  async function* one() {
+    yield draft;
+  }
+  const out: DraftChunk[] = [];
+  for await (const c of fitToBudget(one(), async (t) => estimateTokens(t))) out.push(c);
+  assert.deepEqual(out, [draft]);
 });

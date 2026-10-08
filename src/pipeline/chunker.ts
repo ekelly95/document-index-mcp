@@ -36,6 +36,15 @@ export const MAX_TOKENS = 400;
 
 export const OVERLAP_TOKENS = 40;
 
+/**
+ * The most real model tokens a chunk's own text may take, leaving the rest of
+ * the MAX_TOKENS window for the title and section path that lead its
+ * embedding. Packing uses the chars/4 estimate, which runs up to 2.5x low on
+ * tables and figures, so `fitToBudget` re-checks every chunk with the model's
+ * tokenizer.
+ */
+export const EMBED_TEXT_BUDGET = 352;
+
 export interface DraftChunk {
   kind: ChunkKind;
   locator: Locator;
@@ -312,4 +321,70 @@ export async function* chunkBlocks(
   }
 
   yield* drain(true);
+}
+
+/**
+ * Split any chunk whose text exceeds `budget` real tokens, on the same terms
+ * the chunker splits a block (rows, lines, items, sentences).
+ *
+ * The parts keep the chunk's locator and section path, so the boundary law
+ * holds; the first keeps its overlap and each later one overlaps its
+ * predecessor, exactly as the chunker would have emitted them.
+ */
+export async function* fitToBudget(
+  chunks: AsyncIterable<DraftChunk>,
+  count: (text: string) => Promise<number>,
+  budget = EMBED_TEXT_BUDGET,
+): AsyncIterable<DraftChunk> {
+  for await (const chunk of chunks) yield* fitOne(chunk, count, budget, 0);
+}
+
+async function* fitOne(
+  chunk: DraftChunk,
+  count: (text: string) => Promise<number>,
+  budget: number,
+  depth: number,
+): AsyncIterable<DraftChunk> {
+  const real = await count(chunk.text);
+  if (real <= budget || depth >= 4) {
+    yield chunk;
+    return;
+  }
+
+  // Scale the estimate-based ceiling by how far off the estimate was here.
+  const ceiling = Math.max(16, Math.floor((estimateTokens(chunk.text) * budget * 0.9) / real));
+  const parts = splitByKind(chunk.kind, chunk.text, ceiling);
+  if (parts.length <= 1) {
+    yield chunk;
+    return;
+  }
+
+  for (let i = 0; i < parts.length; i++) {
+    const text = parts[i]!;
+    yield* fitOne(
+      {
+        ...chunk,
+        text,
+        tokenCount: estimateTokens(text),
+        overlapPrefix:
+          i === 0 ? chunk.overlapPrefix : takeLastTokens(parts[i - 1]!, OVERLAP_TOKENS),
+      },
+      count,
+      budget,
+      depth + 1,
+    );
+  }
+}
+
+function splitByKind(kind: ChunkKind, text: string, maxTokens: number): string[] {
+  switch (kind) {
+    case "table":
+      return splitTable(text, maxTokens);
+    case "code":
+      return splitCode(text, maxTokens);
+    case "list":
+      return splitList(text, maxTokens);
+    default:
+      return splitProse(text, maxTokens);
+  }
 }

@@ -7,11 +7,14 @@ import type { FlagEmbedding } from "fastembed";
 import {
   composeEmbedInput,
   Embedder,
+  fitEmbedInput,
+  loadModelTokenCounter,
   MODEL_FILE_SHA256,
   ModelIntegrityError,
   verifyModelFiles,
   type InitEmbedding,
 } from "./embedder.js";
+import { fitToBudget, type DraftChunk } from "../pipeline/chunker.js";
 
 /**
  * Init downloads the model on first run, so it is the one call here that
@@ -126,4 +129,61 @@ test("an absent title changes nothing about the composed input", () => {
   });
   assert.equal(withoutKey, "body");
   assert.equal(withUndefined, "body");
+});
+
+test("context gives way so the chunk's own text always reaches the model", async () => {
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  const count = async (t: string) => t.split(/\s+/).filter(Boolean).length;
+  const chunk = {
+    text: words(90),
+    sectionPath: ["Part", "Chapter", "Section"],
+    overlapPrefix: words(20),
+    documentTitle: "A Title",
+  };
+
+  const roomy = await fitEmbedInput(chunk, count, 200);
+  assert.equal(roomy, composeEmbedInput(chunk), "context was dropped when it fitted");
+
+  const tight = await fitEmbedInput(chunk, count, 96);
+  assert.ok((await count(tight)) <= 96);
+  assert.ok(tight.endsWith(chunk.text), "the passage itself was cut");
+  assert.ok(tight.startsWith("A Title"), "the title went before cheaper context");
+
+  const bare = await fitEmbedInput(chunk, count, 90);
+  assert.equal(bare, chunk.text);
+});
+
+test("with the real tokenizer, fitted chunks never exceed the model window", {
+  skip: process.env["DOCUMENT_INDEX_TEST_REAL_MODEL"] !== "1" || !process.env["DOCUMENT_INDEX_MODEL_CACHE"],
+}, async () => {
+  const count = await loadModelTokenCounter(process.env["DOCUMENT_INDEX_MODEL_CACHE"]!);
+  // Numeric tables are where chars/4 under-counts worst.
+  const table = [
+    "| Nutrient | RDA | UL | % DV |",
+    "| --- | --- | --- | --- |",
+    ...Array.from({ length: 60 }, (_, i) => `| ${i}.5 mg/kg | 1.${i} g | ${i * 7}% | ${i}/${i + 3} |`),
+  ].join("\n");
+  async function* drafts(): AsyncIterable<DraftChunk> {
+    yield {
+      kind: "table",
+      locator: { type: "page", value: "33", ordinal: 32 },
+      sectionPath: ["Micronutrients and Water", "Recommended Dietary Allowances"],
+      bbox: null,
+      text: table,
+      overlapPrefix: "preceding text ".repeat(10),
+      tokenCount: 0,
+    };
+  }
+
+  let parts = 0;
+  for await (const chunk of fitToBudget(drafts(), count)) {
+    parts++;
+    const input = await fitEmbedInput(
+      { ...chunk, documentTitle: "NCSF Ch 5 – Micronutrients and Water" },
+      count,
+    );
+    assert.ok(input.endsWith(chunk.text));
+    assert.ok((await count(input)) <= 400, `fitted input is ${await count(input)} tokens`);
+  }
+  assert.ok(parts > 1, "the table was not split");
 });
