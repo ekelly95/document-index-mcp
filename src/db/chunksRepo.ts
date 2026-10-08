@@ -133,6 +133,8 @@ export interface RowidFilter {
   /** Drop chunks of documents that are not finished indexing. */
   readyOnly?: boolean;
   kind?: ChunkKind;
+  /** Leave this kind out; how search skips reference lists unless asked. */
+  excludeKind?: ChunkKind;
   pageRange?: readonly [number, number];
 }
 
@@ -167,6 +169,10 @@ export function byRowids(
     where.push("c.kind = ?");
     params.push(filter.kind);
   }
+  if (filter.excludeKind) {
+    where.push("c.kind <> ?");
+    params.push(filter.excludeKind);
+  }
   if (filter.pageRange) {
     where.push("c.page_number BETWEEN ? AND ?");
     params.push(filter.pageRange[0], filter.pageRange[1]);
@@ -181,6 +187,22 @@ export function byRowids(
     )
     .all(...params) as HydratedChunkRow[];
   return new Map(rows.map((r) => [r.id, r]));
+}
+
+/**
+ * Stored vectors for some chunks, by rowid. vec0 answers a point lookup on its
+ * primary key; a handful per search is cheap.
+ */
+export function vectorsFor(db: Db, ids: readonly number[]): Map<number, Float32Array> {
+  const lookup = db.prepare("SELECT embedding FROM vec_chunks WHERE chunk_rowid = ?");
+  const out = new Map<number, Float32Array>();
+  for (const id of ids) {
+    const row = lookup.get(vecRowid(id)) as { embedding: Buffer } | undefined;
+    if (!row) continue;
+    const bytes = row.embedding;
+    out.set(id, new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+  }
+  return out;
 }
 
 /**

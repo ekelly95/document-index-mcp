@@ -133,7 +133,7 @@ export interface DocumentParser {
  * into "text" because retrieval only cares about the distinctions that are
  * worth filtering on.
  */
-export type ChunkKind = "text" | "table" | "code" | "list" | "heading";
+export type ChunkKind = "text" | "table" | "code" | "list" | "heading" | "references";
 
 export function toChunkKind(kind: BlockKind): ChunkKind {
   switch (kind) {

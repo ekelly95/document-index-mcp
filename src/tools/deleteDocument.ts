@@ -31,6 +31,7 @@ export function registerDeleteDocument(server: McpServer, ctx: AppContext): void
         "ingested by mistake — an edited file does NOT need this, because re-ingesting " +
         "one already replaces the version it supersedes. Deletion is permanent; the " +
         "document's chunk_ids stop resolving, and re-ingesting the file rebuilds it.",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },

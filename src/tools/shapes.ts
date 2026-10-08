@@ -3,9 +3,10 @@ import type { ChunkRow } from "../db/chunksRepo.js";
 
 /** Shapes shared across the tool surface. */
 
-export const FORMATS = ["pdf", "epub", "docx", "pptx", "md", "html", "txt"] as const;
+/** Formats an index can hold. The router recognises more, only to refuse them by name. */
+export const FORMATS = ["pdf", "docx", "md", "txt"] as const;
 export const LOCATOR_TYPES = ["page", "section"] as const;
-export const CHUNK_KINDS = ["text", "table", "code", "list", "heading"] as const;
+export const CHUNK_KINDS = ["text", "table", "code", "list", "heading", "references"] as const;
 
 export const LocatorShape = z.object({
   type: z.enum(LOCATOR_TYPES),

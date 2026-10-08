@@ -262,6 +262,24 @@ test("exposes exactly five tools", async () => {
   );
 });
 
+test("the reading tools say they are read-only, and delete says it is destructive", async () => {
+  const { tools } = await client.listTools();
+  const hints = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
+  for (const name of ["search_document", "get_document_outline", "get_chunk_context"]) {
+    assert.equal(hints[name]!.readOnlyHint, true, name);
+  }
+  assert.equal(hints["delete_document"]!.destructiveHint, true);
+  assert.equal(hints["ingest_document"]!.readOnlyHint, false);
+  for (const name of Object.keys(hints)) assert.equal(hints[name]!.openWorldHint, false, name);
+});
+
+test("the library listing names each document's path", async () => {
+  const res = await call("get_document_outline", {});
+  const payload = dataOf<{ documents: { source_path: string }[] }>(res);
+  assert.ok(payload.documents.length > 0);
+  assert.ok(payload.documents.every((d) => d.source_path.length > 0 && !path.isAbsolute(d.source_path)));
+});
+
 test("the startup probes for resources and prompts answer instead of erroring", async () => {
   // Codex asks every server these three at startup and reads a -32601 refusal
   // as the server failing to start — that is what put it on the host's

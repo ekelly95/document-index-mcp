@@ -1,4 +1,4 @@
-import { byRowids, type HydratedChunkRow } from "../db/chunksRepo.js";
+import { byRowids, vectorsFor, type HydratedChunkRow } from "../db/chunksRepo.js";
 import type { Db } from "../db/sqlite.js";
 import { packVector } from "../db/sqlite.js";
 import type { Embedder } from "../embeddings/embedder.js";
@@ -92,6 +92,8 @@ export const DEFAULT_FUSION: FusionTuning = {
  */
 const PUSHED_DOWN_OVERFETCH = 2;
 const POST_FILTER_OVERFETCH = 32;
+/** Reference lists are a minority of a corpus, so skipping them needs only a little slack. */
+const REFERENCE_EXCLUSION_OVERFETCH = 4;
 
 /**
  * How many times a leg may be re-run with a wider net before giving up.
@@ -132,8 +134,36 @@ export interface HybridQuery {
 
 export interface Hit {
   row: HydratedChunkRow;
+  /** Fused rank score. Orders hits; says nothing about relevance on its own. */
   score: number;
   snippet: string;
+  /**
+   * Cosine similarity between the query and this chunk's embedding.
+   * Comparable across queries, unlike `score`. Null in lexical mode, where the
+   * query is never embedded.
+   */
+  similarity: number | null;
+  /** Whether full-text search matched the query's words in this chunk. */
+  lexicalMatch: boolean;
+}
+
+/**
+ * Below this best-hit similarity the library probably does not cover the
+ * question. Calibrated for bge-small-en-v1.5 on a real 11-chapter textbook
+ * library (2026-10): 25 on-topic questions scored 0.731-0.849, 15 off-topic
+ * ones 0.398-0.575, so this sits in the gap. A question near the library's
+ * subject but not answered by it will land around here; that is what "low"
+ * is for. Re-measure if the embedding model or embedded text changes.
+ */
+export const CONFIDENT_SIMILARITY = 0.65;
+
+export type Confidence = "high" | "low";
+
+/** How far to trust a result set, or null when there is no similarity to judge by. */
+export function assessConfidence(hits: readonly Hit[]): Confidence | null {
+  const sims = hits.map((h) => h.similarity).filter((s): s is number => s !== null);
+  if (sims.length === 0) return hits.length === 0 ? "low" : null;
+  return Math.max(...sims) >= CONFIDENT_SIMILARITY ? "high" : "low";
 }
 
 /**
@@ -212,6 +242,8 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
   if (q.filter?.kind) {
     where.push("c.kind = ?");
     params.push(q.filter.kind);
+  } else {
+    where.push("c.kind <> 'references'");
   }
   if (q.filter?.pageRange) {
     where.push("c.page_number BETWEEN ? AND ?");
@@ -239,14 +271,12 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
   };
 }
 
-async function semanticLeg(
+function semanticLeg(
   db: Db,
-  embedder: Embedder,
+  vector: readonly number[],
   q: HybridQuery,
   limit: number,
-): Promise<number[]> {
-  const vector = await embedder.embedQuery(q.query);
-
+): number[] {
   // document_id is the vec0 partition key, so scoping to one document
   // pre-filters the KNN scan rather than discarding results afterwards.
   const scoped = q.documentId !== undefined;
@@ -320,39 +350,37 @@ export async function hybridSearch(
   q: HybridQuery,
 ): Promise<Hit[]> {
   // What each leg cannot answer for itself, and therefore has to over-fetch
-  // against.
-  //
-  // The vector leg pre-filters on document_id and nothing else — that is the
-  // vec0 partition key and vec_chunks carries no other column — so kind,
-  // page_range, section_prefix and the ready check all cost it candidates.
-  //
-  // The lexical leg pushes document_id, kind, page_range and ready into its
-  // own SQL. It CANNOT push section_prefix: section paths are stored as a JSON
-  // array, so there is no column to compare against. An earlier version
-  // escalated only the vector leg for section_prefix while leaving this one at
-  // 2x, and the comment here claimed the lexical leg "already honours all of
-  // them" — it does not. A section-scoped query therefore handed 20 unfiltered
-  // candidates to a filter the leg knew nothing about while the vector leg got
-  // 1,600, and hybrid quietly degraded to semantic-only: the exact mirror of
-  // the failure the 32x constant was introduced to fix.
+  // against. The vector leg pre-filters on document_id only (the vec0
+  // partition key), so kind, page_range, section_prefix, the ready check and
+  // the default reference-list exclusion all cost it candidates. The lexical
+  // leg pushes everything but section_prefix (JSON, no column) into its SQL.
   const lexicalPostFiltered = q.filter?.sectionPrefix !== undefined;
-  const semanticPostFiltered =
+  const selective =
     q.filter !== undefined &&
     (q.filter.kind !== undefined ||
       q.filter.pageRange !== undefined ||
       q.filter.sectionPrefix !== undefined);
+  const excludesReferences = q.filter?.kind === undefined;
 
   let lexicalLimit = q.k * (lexicalPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
-  let semanticLimit = q.k * (semanticPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
+  let semanticLimit =
+    q.k *
+    (selective
+      ? POST_FILTER_OVERFETCH
+      : excludesReferences
+        ? REFERENCE_EXCLUSION_OVERFETCH
+        : PUSHED_DOWN_OVERFETCH);
+  const semanticPostFiltered = selective || excludesReferences;
+
+  // Embedded once, not once per escalation round.
+  const vector = q.mode !== "lexical" ? await embedder.embedQuery(q.query) : null;
 
   let hits: Hit[] = [];
   for (let round = 0; ; round++) {
     const lexical = q.mode !== "semantic"
       ? lexicalLeg(db, q, lexicalLimit)
       : { ids: [], snippets: new Map<number, string>() };
-    const semantic = q.mode !== "lexical"
-      ? await semanticLeg(db, embedder, q, semanticLimit)
-      : [];
+    const semantic = vector ? semanticLeg(db, vector, q, semanticLimit) : [];
 
     hits = fuseAndHydrate(db, q, lexical, semantic);
     if (hits.length >= q.k || round >= MAX_ESCALATIONS) break;
@@ -366,6 +394,20 @@ export async function hybridSearch(
 
     if (lexicalSaturated) lexicalLimit *= 2;
     if (semanticSaturated) semanticLimit *= 2;
+  }
+
+  if (vector) {
+    // Exact cosine from the stored vectors. Both sides are unit-normalised, so
+    // it is the dot product. This is the one number here that means the same
+    // thing from one query to the next.
+    const stored = vectorsFor(db, hits.map((h) => h.row.id));
+    for (const hit of hits) {
+      const v = stored.get(hit.row.id);
+      if (!v) continue;
+      let dot = 0;
+      for (let i = 0; i < v.length; i++) dot += v[i]! * vector[i]!;
+      hit.similarity = dot;
+    }
   }
 
   return hits;
@@ -422,7 +464,7 @@ function fuseAndHydrate(
     ranked.map(([id]) => id),
     {
       readyOnly: true,
-      ...(q.filter?.kind === undefined ? {} : { kind: q.filter.kind }),
+      ...(q.filter?.kind === undefined ? { excludeKind: "references" as const } : { kind: q.filter.kind }),
       ...(q.filter?.pageRange === undefined ? {} : { pageRange: q.filter.pageRange }),
     },
   );
@@ -445,6 +487,8 @@ function fuseAndHydrate(
       row,
       score,
       snippet: lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query),
+      similarity: null,
+      lexicalMatch: lexical.snippets.has(id),
     });
     if (hits.length >= q.k) break;
   }

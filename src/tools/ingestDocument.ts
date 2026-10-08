@@ -40,6 +40,8 @@ export function registerIngestDocument(server: McpServer, ctx: AppContext): void
         "continues in the background — poll get_document_outline with that id to watch " +
         "chunk_count rise and see when status becomes 'ready'. Re-ingesting an identical " +
         "file is a no-op and returns the existing document_id.",
+      // Re-ingesting identical bytes is a no-op; reading the library is local.
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },
