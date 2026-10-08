@@ -8,6 +8,41 @@ changes.
 
 ## Unreleased
 
+### October 2026 audit
+
+Measured against a real library of eleven textbook PDFs; the before/after
+table is in [docs/roadmap.md](docs/roadmap.md).
+
+- **Search says when the library does not cover a question.** Hits carry a
+  cosine `similarity` and `lexical_match`; `search_document` reports
+  `confidence: "high" | "low"`, calibrated at 0.65 (on-topic 0.73–0.85,
+  off-topic 0.40–0.58).
+- **Reference lists are tagged `references`** and left out of search unless
+  `filter.kind` asks for them.
+- **PDF headings are recognised by style** (size and font), not by "bigger than
+  body text". Six of eleven chapters had no structure before; none do now.
+  The OCR-noise guard that caused it is gone.
+- **Running headers, page numbers and citation markers are furniture**, and
+  fragments under 24 tokens merge into a neighbour on the same page.
+- **No chunk is truncated before embedding.** 19% were; chunks are re-split
+  against the model's own tokenizer and context gives way to text.
+- **`pnpm reindex`** rebuilds an index from the library, keeping titles.
+  Schema v5 (`references` kind, tightened constraints) requires it.
+- **The model is pinned by SHA-256.** fastembed 3 downloads it from Hugging
+  Face (identical weights); the `tar` override, patch and CI check are gone.
+- **A scanned PDF can no longer hang the ingest queue** when OCR language data
+  cannot load, a failed OCR pool build is retried, and OCR workers are released
+  after five idle minutes.
+- **docx:** text in content controls is read; heading levels resolve through
+  `styles.xml`, so localized and custom heading styles work.
+- **Fixed:** case-folded supersede evicting a different file on Linux;
+  `delete_document` refusing a crashed ingest forever; `--flag=` values
+  containing `=` truncated; the FTS count check could never disagree.
+- **Tool annotations** (read-only, destructive, idempotent), `source_path` in
+  the library listing, version from package.json. MCP SDK 2.3.1, pdfjs 6.4.
+
+### Earlier
+
 A security pass over everything since the initial release. The reasoning and the
 measurements are in [SECURITY.md](SECURITY.md); what changed is here.
 

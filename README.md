@@ -116,6 +116,13 @@ pnpm ingest --library=/path/to/your/library "Papers" --recursive
 directory beneath it turns one command into a multi-hour sweep that fills the index with junk. This is
 the main argument for a dedicated library folder rather than your home directory.
 
+After upgrading, or whenever the index format changes, rebuild it. The server refuses an index built
+by an older schema and says so; rebuilding keeps every document's title:
+
+```bash
+pnpm reindex --library=/path/to/your/library
+```
+
 A document is read whole into memory, so files above 512 MB are refused rather than attempted. Raise
 it with `--max-file-mb=` or `DOCUMENT_INDEX_MAX_FILE_MB`; the refusal names both the file's size and
 the limit, so you know which to change.
@@ -128,8 +135,8 @@ the limit, so you know which to change.
 |---|---|---|---|
 | `.md` | `section` (`sec-N`, advancing at each H1/H2) | ATX headings | Block text is sliced from the source, never re-serialized |
 | `.txt` | `section` | Setext underlines, numbered sections, ALL-CAPS lines, named divisions | A flat outline may be correct rather than a failure |
-| `.pdf` | `page`, plus `printed_label` where the printed number differs | Embedded bookmarks refined by font-size tiers | Sideways margin text is dropped as furniture; scans and mojibake escalate to OCR, or are refused under `--ocr=off` |
-| `.docx` | `section` | Heading styles (`Heading1`–`6`, `Title`) | Headers, footers, comments and tracked-change machinery are never read. Deletions cannot leak: only `w:t` is read, never `w:delText` |
+| `.pdf` | `page`, plus `printed_label` where the printed number differs | Embedded bookmarks refined by heading styles (size + font) | Tables are read as prose; running headers, page numbers and citation markers are dropped as furniture; scans and mojibake escalate to OCR, or are refused under `--ocr=off` |
+| `.docx` | `section` | Heading styles, resolved through the document's style sheet, so localized and custom heading styles count | Headers, footers, comments and tracked-change machinery are never read. Deletions cannot leak: only `w:t` is read, never `w:delText` |
 | `.epub` | — | — | Removed, not deferred. Recognised by content sniffing and refused by name, with the reason |
 | `.pptx` / `.ppt` | — | — | Removed. Run `scripts/convert-for-ingest.ps1` for a PDF plus a speaker-notes file, and ingest both |
 | `.html` | — | — | Recognised by content sniffing and refused with a reason |
@@ -163,7 +170,7 @@ The embedding model is English-only, so a multilingual library retrieves poorly.
 
 | Tool | What it does |
 |---|---|
-| `search_document` | Hybrid BM25 + semantic search. Ranked snippets with locators. The usual starting point. |
+| `search_document` | Hybrid BM25 + semantic search. Ranked snippets with locators, each with a similarity score, plus a `confidence` that says when the library probably does not cover the question. The usual starting point. |
 | `get_document_outline` | Heading tree with chunk ranges. Also lists the library, and reports ingest progress. |
 | `get_chunk_context` | The only tool that returns body text, hard-capped at 24,000 characters. |
 | `ingest_document` | Index a file. Returns immediately; indexing continues in the background. |
@@ -176,6 +183,10 @@ from the hit or `document_id` + `seq` from the outline.
 
 Search never returns full document bodies. That is structural rather than conventional: the output
 schema for a search hit has no text field at all, so a refactor cannot quietly regress it.
+
+Reference lists are recognised at ingest (a References heading, or citation-dense text) and left out
+of search by default, since a list of paper titles matches every question on its topic while
+answering none. `filter.kind: "references"` searches them.
 
 ### With YouTube Transcript Notes
 
@@ -280,9 +291,8 @@ The engineering record lives in `docs/`, and is worth reading before changing an
   deliberate deviation from the original specification with its reasoning.
 - **[docs/gotchas.md](docs/gotchas.md)** — the accumulated sharp edges, most of them bugs first. Each
   is a trap a reasonable change would walk straight back into.
-- **[docs/roadmap.md](docs/roadmap.md)** — what is built, what was cut and why, and the loose ends
-  stated honestly. The largest: the fusion score orders results without measuring relevance, so a
-  search of a library that does not cover your question still returns a confident-looking five.
+- **[docs/roadmap.md](docs/roadmap.md)** — what is built, what was cut and why, the October 2026
+  audit against a real library with its before/after numbers, and the loose ends stated honestly.
 
 ## Licence
 

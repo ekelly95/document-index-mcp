@@ -117,10 +117,8 @@ chosen root, and any input that causes code execution or unbounded resource use.
 
 - Vulnerabilities in `pdfjs-dist`, `tesseract.js`, `better-sqlite3`,
   `sqlite-vec` or `fastembed`, which should be reported to those projects.
-- Retrieval quality. The fusion score orders results without measuring
-  relevance, so a search of a library that does not cover the question still
-  returns a confident-looking five. That is a known defect, recorded in
-  `docs/roadmap.md`, not a vulnerability.
+- Retrieval quality, including where the `confidence` threshold falls for a
+  given library. See `docs/roadmap.md`.
 - OCR errors, and text a parser cannot recover from a malformed file.
 - Anything the MCP client does with what this server hands it. Passage text is
   document content and should be treated as untrusted by whatever reads it.
