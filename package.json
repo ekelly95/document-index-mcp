@@ -54,6 +54,7 @@
     "build": "pnpm clean && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "ingest": "node dist/cli/ingest.js",
+    "reindex": "node dist/cli/reindex.js",
     "eval": "node dist/eval/run.js",
     "test": "pnpm build && node --test \"dist/**/*.test.js\"",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
