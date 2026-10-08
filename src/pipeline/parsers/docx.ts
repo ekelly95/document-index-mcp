@@ -41,10 +41,13 @@ interface LoadedDocx {
   /** `w:id` -> note text, for footnotes and endnotes respectively. */
   footnotes: Map<string, string>;
   endnotes: Map<string, string>;
+  /** Paragraph style id -> heading level, resolved through word/styles.xml. */
+  headingStyles: Map<string, number>;
 }
 
 const keepEntry = (name: string): boolean =>
   name === "word/document.xml" ||
+  name === "word/styles.xml" ||
   name === "docProps/core.xml" ||
   name === "word/footnotes.xml" ||
   name === "word/endnotes.xml";
@@ -52,11 +55,11 @@ const keepEntry = (name: string): boolean =>
 export class DocxParser implements DocumentParser {
   async metadata(src: DocumentSource): Promise<DocumentMetadata> {
     const doc = await loadDocx(src);
-    const headings = countSectionHeadings(doc.body);
+    const headings = countSectionHeadings(doc);
     return {
       title:
         doc.title ??
-        firstHeadingOneText(doc.body) ??
+        firstHeadingOneText(doc) ??
         path.basename(src.absPath, path.extname(src.absPath)),
       locatorScheme: "section",
       locatorCount: Math.max(1, headings),
@@ -124,14 +127,14 @@ export class DocxParser implements DocumentParser {
       }
     };
 
-    for (const el of elements(doc.body)) {
+    for (const el of bodyBlocks(doc.body)) {
       switch (local(el)) {
         case "p": {
           const text = paragraphText(el);
           if (!text) continue;
 
           const style = paragraphStyle(el);
-          const headingLevel = headingLevelOf(style);
+          const headingLevel = headingLevelOf(el, doc.headingStyles);
           if (headingLevel !== null) {
             yield* flush();
             const parentTrail = trail.slice(0, headingLevel - 1);
@@ -218,6 +221,7 @@ function loadDocx(src: DocumentSource): Promise<LoadedDocx> {
       title: coreTitle(archive),
       footnotes: loadNotes(archive, "word/footnotes.xml", "footnote"),
       endnotes: loadNotes(archive, "word/endnotes.xml", "endnote"),
+      headingStyles: loadHeadingStyles(archive),
     };
   });
 }
@@ -280,12 +284,95 @@ function paragraphStyle(p: XmlElement): string | null {
   return findFirst(pPr, "pStyle")?.getAttribute("w:val") ?? null;
 }
 
-/** "Heading1".."Heading6" (and "Title" as level 1) -> heading depth. */
-function headingLevelOf(style: string | null): number | null {
-  if (style === null) return null;
-  if (/^Title$/i.test(style)) return 1;
-  const m = /^Heading([1-6])$/i.exec(style);
+/**
+ * Block-level children of the body, descending into content controls.
+ *
+ * A body-level `w:sdt` wraps its paragraphs in `w:sdtContent`; templates put
+ * cover pages, abstracts and whole sections there. Skipping the wrapper
+ * silently dropped all of that text.
+ */
+function bodyBlocks(parent: XmlElement): XmlElement[] {
+  const out: XmlElement[] = [];
+  for (const el of elements(parent)) {
+    if (local(el) === "sdt") {
+      const content = elements(el).find((c) => local(c) === "sdtContent");
+      if (content) out.push(...bodyBlocks(content));
+    } else {
+      out.push(el);
+    }
+  }
+  return out;
+}
+
+/** Level from a style NAME, which Word keeps in English even when the id is localized. */
+function levelFromName(name: string): number | null {
+  if (/^title$/i.test(name)) return 1;
+  const m = /^heading\s*([1-6])$/i.exec(name);
   return m ? Number(m[1]) : null;
+}
+
+/** `w:outlineLvl` 0..5 -> heading 1..6; 9 (and anything else) is body text. */
+function levelFromOutline(el: XmlElement | null): number | null {
+  const raw = el?.getAttribute("w:val");
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 5 ? n + 1 : null;
+}
+
+/**
+ * Style id -> heading level, from word/styles.xml.
+ *
+ * Matching ids like `Heading1` only worked for English Word: a German file
+ * says `berschrift1` (Word strips the Ü from ids), and a custom "Chapter"
+ * style based on Heading 1 is a heading too. So each style resolves by its
+ * name, then its own outline level, then whatever it is based on.
+ */
+function loadHeadingStyles(archive: ZipArchive): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!archive.has("word/styles.xml")) return out;
+
+  const byId = new Map<string, { name: string; basedOn: string | null; outline: number | null }>();
+  for (const style of findAll(parseXml(archive.text("word/styles.xml")), "style")) {
+    const id = style.getAttribute("w:styleId");
+    if (id === null) continue;
+    byId.set(id, {
+      name: findFirst(style, "name")?.getAttribute("w:val") ?? "",
+      basedOn: findFirst(style, "basedOn")?.getAttribute("w:val") ?? null,
+      outline: levelFromOutline(findFirst(style, "outlineLvl")),
+    });
+  }
+
+  for (const id of byId.keys()) {
+    let current: string | null = id;
+    for (let depth = 0; current !== null && depth < 10; depth++) {
+      const style = byId.get(current);
+      if (!style) break;
+      const level = levelFromName(style.name) ?? style.outline;
+      if (level !== null) {
+        out.set(id, level);
+        break;
+      }
+      current = style.basedOn;
+    }
+  }
+  return out;
+}
+
+/**
+ * Heading depth of a paragraph: its own outline level, else its style as
+ * resolved through styles.xml, else the English style id ("Heading1",
+ * "Title") for files that ship no styles part.
+ */
+function headingLevelOf(p: XmlElement, headingStyles: Map<string, number>): number | null {
+  const pPr = findFirst(p, "pPr");
+  const own = pPr ? levelFromOutline(findFirst(pPr, "outlineLvl")) : null;
+  if (own !== null) return own;
+
+  const style = paragraphStyle(p);
+  if (style === null) return null;
+  const resolved = headingStyles.get(style);
+  if (resolved !== undefined) return resolved;
+  return levelFromName(style);
 }
 
 /**
@@ -311,18 +398,18 @@ function paragraphText(p: XmlElement): string {
   return collapse(out);
 }
 
-function countSectionHeadings(doc: XmlElement): number {
+function countSectionHeadings(doc: LoadedDocx): number {
   let n = 0;
-  for (const p of findAll(doc, "p")) {
-    const level = headingLevelOf(paragraphStyle(p));
+  for (const p of findAll(doc.body, "p")) {
+    const level = headingLevelOf(p, doc.headingStyles);
     if (level !== null && level <= 2) n++;
   }
   return n;
 }
 
-function firstHeadingOneText(doc: XmlElement): string | null {
-  for (const p of findAll(doc, "p")) {
-    if (headingLevelOf(paragraphStyle(p)) === 1) {
+function firstHeadingOneText(doc: LoadedDocx): string | null {
+  for (const p of findAll(doc.body, "p")) {
+    if (headingLevelOf(p, doc.headingStyles) === 1) {
       const text = paragraphText(p);
       if (text.length > 0) return text;
     }

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DEFAULT_MAX_FILE_MB, DEFAULT_OCR_WORKERS, loadConfig } from "./config.js";
+import { DEFAULT_MAX_FILE_MB, DEFAULT_OCR_WORKERS, loadConfig, parseFlags } from "./config.js";
 
 function tempLibrary(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "document-index-mcp-config-"));
@@ -221,4 +221,12 @@ test("an OCR language path that is missing or not a directory is refused", () =>
     () => loadConfig([`--library=${lib}`, `--ocr-lang-path=${file}`]),
     /OCR language path is not a directory/,
   );
+});
+
+test("a flag value containing = is kept whole", () => {
+  const flags = parseFlags(["--db=C:\idx\a=b.db", "--recursive", "positional", "--k=10"]);
+  assert.equal(flags.get("db"), "C:\idx\a=b.db");
+  assert.equal(flags.get("recursive"), "true");
+  assert.equal(flags.get("k"), "10");
+  assert.equal(flags.has("positional"), false);
 });

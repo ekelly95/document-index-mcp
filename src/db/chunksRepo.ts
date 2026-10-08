@@ -183,7 +183,13 @@ export function byRowids(
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** Row-count reconciliation across the three indexes. Used by tests and the CLI. */
+/**
+ * Row-count reconciliation across the three indexes. Used by tests and the CLI.
+ *
+ * FTS is counted from `search_fts_docsize`, the rows actually indexed. A
+ * `count(*)` on an external-content FTS table reads the content table, so it
+ * always equals the chunk count and could never disagree.
+ */
 export function indexCounts(db: Db): {
   chunks: number;
   fts: number;
@@ -192,7 +198,7 @@ export function indexCounts(db: Db): {
   const one = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
   return {
     chunks: one("SELECT count(*) AS c FROM document_chunks"),
-    fts: one("SELECT count(*) AS c FROM search_fts"),
+    fts: one("SELECT count(*) AS c FROM search_fts_docsize"),
     vectors: one("SELECT count(*) AS c FROM vec_chunks"),
   };
 }

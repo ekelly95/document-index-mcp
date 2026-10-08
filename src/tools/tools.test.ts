@@ -10,7 +10,7 @@ import { createContext, type AppContext } from "../context.js";
 import { testEmbedder } from "../testing/stubEmbedder.js";
 import { buildServer } from "../server.js";
 import { indexCounts } from "../db/chunksRepo.js";
-import { deleteDocument } from "../db/documentsRepo.js";
+import { deleteDocument, INGEST_LEASE_MS, insertDocument } from "../db/documentsRepo.js";
 import { buildPdf, type PdfFixture } from "../testing/pdfFixture.js";
 
 /**
@@ -752,6 +752,36 @@ test("delete_document refuses an unknown id as a result, not a protocol failure"
   const res = await call("delete_document", { document_id: "01NOTATHING" });
   assert.equal((res as { isError?: boolean }).isError, true);
   assert.match(textOf(res), /Unknown document_id/);
+});
+
+test("delete_document refuses a live ingest but removes one whose writer is gone", async () => {
+  const insert = (id: string, sha: string) =>
+    insertDocument(ctx.db, {
+      id,
+      title: id,
+      sourcePath: `${id}.md`,
+      format: "md",
+      sha256: sha,
+      engineUsed: "ts-fast",
+      locatorScheme: "section",
+      locatorCount: 1,
+      embeddingModel: "fast-bge-small-en-v1.5",
+      ingestWarning: null,
+    });
+
+  insert("01LIVEINGEST", "a".repeat(64));
+  const live = await call("delete_document", { document_id: "01LIVEINGEST" });
+  assert.equal((live as { isError?: boolean }).isError, true);
+  assert.match(textOf(live), /still being indexed/);
+
+  insert("01DEADINGEST", "b".repeat(64));
+  ctx.db
+    .prepare("UPDATE documents SET updated_at = ? WHERE id = ?")
+    .run(new Date(Date.now() - INGEST_LEASE_MS - 1000).toISOString(), "01DEADINGEST");
+  const dead = await call("delete_document", { document_id: "01DEADINGEST" });
+  assert.notEqual((dead as { isError?: boolean }).isError, true, textOf(dead));
+
+  deleteDocument(ctx.db, "01LIVEINGEST");
 });
 
 test("the YouTube seam: a transcript is findable and its timestamps survive intact", async () => {

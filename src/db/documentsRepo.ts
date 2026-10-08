@@ -77,18 +77,19 @@ export function getDocument(db: Db, id: string): DocumentRow | undefined {
  *
  * Editing a file changes its sha256, so a re-ingest produces a SECOND document
  * at the same path while the old one keeps ranking. This is the query that
- * finds the stale one. `COLLATE NOCASE` because macOS APFS is case-insensitive
- * but `realpath` does not canonicalise case there, so two spellings of one
- * path can reach the database.
+ * finds the stale one. Case-insensitive only where the filesystem is (macOS
+ * `realpath` does not canonicalise case); on Linux `Notes.md` and `notes.md`
+ * are two files, and folding them would evict the wrong one.
  */
 export function findStaleAtPath(
   db: Db,
   sourcePath: string,
   keepSha256: string,
+  caseInsensitive = process.platform === "win32" || process.platform === "darwin",
 ): DocumentRow[] {
   return db
     .prepare(
-      "SELECT * FROM documents WHERE source_path = ? COLLATE NOCASE AND sha256 <> ?",
+      `SELECT * FROM documents WHERE source_path = ? ${caseInsensitive ? "COLLATE NOCASE" : ""} AND sha256 <> ?`,
     )
     .all(sourcePath, keepSha256) as DocumentRow[];
 }

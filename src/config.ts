@@ -55,13 +55,24 @@ export interface ServerConfig {
  * The database and model cache DO default, since both are derived artefacts
  * that are rebuildable and carry no risk if they land in the wrong place.
  */
-export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig {
+/**
+ * `--key=value` flags. Split on the FIRST `=` only: `split("=", 2)` drops
+ * everything after a second one, which truncates a path like `C:\a=b`.
+ */
+export function parseFlags(argv: readonly string[]): Map<string, string> {
   const flags = new Map<string, string>();
   for (const arg of argv) {
     if (!arg.startsWith("--")) continue;
-    const [key, value] = arg.slice(2).split("=", 2);
-    if (key) flags.set(key, value ?? "true");
+    const body = arg.slice(2);
+    const eq = body.indexOf("=");
+    const key = eq === -1 ? body : body.slice(0, eq);
+    if (key) flags.set(key, eq === -1 ? "true" : body.slice(eq + 1));
   }
+  return flags;
+}
+
+export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig {
+  const flags = parseFlags(argv);
 
   const raw = flags.get("library") ?? process.env["DOCUMENT_INDEX_LIBRARY_PATH"];
   if (!raw) {

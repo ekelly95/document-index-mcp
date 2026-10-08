@@ -155,3 +155,59 @@ test("an empty body is refused, never a silently empty document", async () => {
     (err: unknown) => err instanceof UnsupportedFormatError && /no body text/.test(err.message),
   );
 });
+
+test("text inside a body-level content control is read, not skipped", async () => {
+  const blocks = await collect(
+    open({
+      blocks: [
+        { sdt: [{ heading: "Cover", level: 1 }, { paragraph: "Inside the control." }] },
+        { paragraph: "After it." },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    blocks.map((b) => [b.kind, b.text]),
+    [
+      ["heading", "Cover"],
+      ["paragraph", "Inside the control."],
+      ["paragraph", "After it."],
+    ],
+  );
+});
+
+test("localized and custom heading styles resolve through styles.xml", async () => {
+  const src = open({
+    styles: [
+      // German Word: the id is localized, the name is not.
+      { id: "berschrift1", name: "heading 1" },
+      { id: "berschrift2", name: "heading 2" },
+      // A house style built on Heading 2, two levels deep.
+      { id: "Chapter", name: "Chapter", basedOn: "berschrift1" },
+      { id: "Sub", name: "Subsection", basedOn: "Mid" },
+      { id: "Mid", name: "Middle", outlineLvl: 1 },
+      { id: "Body", name: "Body Text", outlineLvl: 9 },
+    ],
+    blocks: [
+      { styled: "Einleitung", style: "berschrift1" },
+      { styled: "Hintergrund", style: "berschrift2" },
+      { styled: "Part One", style: "Chapter" },
+      { styled: "Detail", style: "Sub" },
+      { styled: "Just body.", style: "Body" },
+    ],
+  });
+
+  const blocks = await collect(src);
+  assert.deepEqual(
+    blocks.map((b) => [b.kind, b.text, b.level ?? null]),
+    [
+      ["heading", "Einleitung", 1],
+      ["heading", "Hintergrund", 2],
+      ["heading", "Part One", 1],
+      ["heading", "Detail", 2],
+      ["paragraph", "Just body.", null],
+    ],
+  );
+  const meta = await new DocxParser().metadata(src);
+  assert.equal(meta.locatorCount, 4);
+  assert.equal(meta.title, "Einleitung");
+});
