@@ -21,9 +21,8 @@ import { Embedder, EMBEDDING_DIM, type InitEmbedding } from "../embeddings/embed
  * real model, which is fine because none of them is grading relevance.
  *
  * What it cannot stand in for is the model pipeline itself: the download, the
- * tar extract that `patches/fastembed@2.1.0.patch` touches, and ONNX loading.
- * Those need the real thing, which is why `DOCUMENT_INDEX_TEST_REAL_MODEL`
- * exists and why CI still runs one job with it set.
+ * pinned-hash check and ONNX loading. Those need the real thing, which is why
+ * `DOCUMENT_INDEX_TEST_REAL_MODEL` exists and why CI still runs one job with it set.
  */
 
 /** FNV-1a, for a stable bucket per token across platforms and runs. */

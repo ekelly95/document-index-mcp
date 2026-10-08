@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   process.on("SIGTERM", stop);
 
   process.stderr.write(`library: ${config.libraryRoot}\ndb:      ${config.dbPath}\n\n`);
-  process.stderr.write("warming up the embedding model (first run downloads ~130MB)...\n");
+  process.stderr.write("warming up the embedding model (first run downloads ~65MB)...\n");
   await ctx.embedder.warmup();
 
   const files: string[] = [];

@@ -5,67 +5,35 @@ import type {
   DocumentParser,
   DocumentSource,
 } from "../ir.js";
-import { log } from "../../log.js";
 import {
   assembleLines,
   isPageNumberLine,
   loadPdf,
   pdfMetadata,
-  samplePageNumbers,
   type LoadedPdf,
   type PdfLine,
 } from "./pdfCommon.js";
+import { analyseStructure, isCitationMarkerLine, type StructureAnalysis } from "./pdfStructure.js";
 
 /**
- * PDF with a usable text layer -> IR.
- *
- * pdfjs-dist rather than the spec's MuPDF.js: mupdf is AGPL-3.0-or-later,
- * which would be viral over this entire server. pdfjs-dist is Apache-2.0 and
- * supplies everything the design needs — per-item text matrices for bbox and
- * font size, getPageLabels() for printed page numbers, getOutline() for
- * embedded bookmarks.
+ * PDF with a usable text layer -> IR, via pdfjs-dist (Apache-2.0; MuPDF.js is
+ * AGPL). Text matrices give bbox and size, getPageLabels() printed numbers,
+ * getOutline() bookmarks.
  */
 
-/** A line larger than body text by this factor reads as a heading. */
-const HEADING_SIZE_RATIO = 1.15;
 /** Vertical gap, as a multiple of font size, that ends a paragraph. */
 const PARAGRAPH_GAP_RATIO = 1.6;
-/** Pages sampled to learn body font size and running headers. */
-const ANALYSIS_SAMPLE = 20;
+/**
+ * Pages read to learn the document's heading styles and running headers. All
+ * of them up to this many: a chapter-heading style can occur on 5% of a book's
+ * pages, and a 20-page sample used to miss it entirely.
+ */
+const MAX_ANALYSED_PAGES = 600;
 /** A wrapped heading's continuation may sit this many line heights below it. */
 const HEADING_WRAP_GAP_RATIO = 2;
 /** Lines a single heading may span, and the characters it may run to. */
 const HEADING_WRAP_MAX_LINES = 4;
 const HEADING_WRAP_MAX_CHARS = 200;
-
-/**
- * Above BOTH of these, the font-size signal is noise and is discarded.
- *
- * Measured across the stress corpus. A clean document has two to five heading
- * tiers and produces at most ~1.5 heading lines per page; a 408-page scan
- * carrying an OCR text layer produced TWELVE tiers and 6.9 heading lines per
- * page, because OCR font sizes are a near-continuum rather than a few chosen
- * values. Nearly every line cleared the body-size ratio, so 2,824 lines became
- * headings, the outline grew to 2,476 nodes of fragments, and — the damage
- * that matters — every spurious heading became a chunk boundary, shattering
- * the book into 2,766 chunks averaging 65 tokens against a 350 target.
- *
- * Both conditions are required, because either alone has a legitimate
- * counter-example: a glossary is all headings at ONE size, and a title page
- * can carry several sizes across very few lines.
- */
-const MAX_TRUSTED_TIERS = 6;
-const MAX_TRUSTED_HEADINGS_PER_PAGE = 3;
-
-interface PageAnalysis {
-  bodySize: number;
-  /** Sizes above body size, largest first. Only ranks a heading; never gates one. */
-  headingSizes: number[];
-  /** False when the sizes read as OCR noise. See MAX_TRUSTED_* above. */
-  trustSizes: boolean;
-  /** Normalised text of lines that repeat across pages as headers/footers. */
-  runningText: Set<string>;
-}
 
 /** One open section, and the font size that opened it. */
 interface TrailEntry {
@@ -87,16 +55,10 @@ const normalise = (s: string) =>
     .trim();
 
 /**
- * Does this heading name the section the trail already sits in?
- *
- * A bookmarked section title is usually also printed as a visible heading on
- * its opening page, and extending the trail with it again nests the section
- * inside itself. Equality is not enough: a heading printed across two lines
- * arrives as its own TAIL once the first line has been consumed elsewhere, so
- * `AND TABLES` has to be recognised as part of `List of Illustrations and
- * Tables`. Suffix, not substring — a tail is always a suffix, whereas
- * substring would fold `Introduction` and `Introduction to Statistics`
- * together, and those are two different sections.
+ * Does this heading name the section the trail already sits in? A bookmarked
+ * section is usually also printed on its page; a heading wrapped over two lines
+ * can arrive as its tail ("AND TABLES"), so a word-boundary suffix counts too.
+ * Suffix, not substring: "Introduction" and "Introduction to Statistics" differ.
  */
 function namesSameSection(heading: string, current: string): boolean {
   const a = normalise(heading);
@@ -118,25 +80,12 @@ export class PdfFastParser implements DocumentParser {
     const trailByPage = await bookmarkTrails(loaded);
     const analysis = await analysePages(loaded);
 
-    // Bookmarks and font-size tiers are combined rather than chosen between.
-    //
-    // Bookmarks are authoritative but coarse — they resolve to a page, so
-    // they cannot see a subsection that starts halfway down one. Font-size
-    // tiers are finer but noisier. So a bookmark RE-BASES the trail when its
-    // section begins, and detected headings extend it from there. Front
-    // matter, which usually sits before the first bookmark, still gets a
-    // section path from its headings.
-    //
-    // The trail is a STACK ordered by the font size that opened each section,
-    // not an array indexed by heading level. Level came from the tier index,
-    // and `trail.slice(0, level - 1)` cannot pad — so a heading whose level
-    // exceeded the current depth appended instead of replacing, and equal-sized
-    // sections nested inside one another in a staircase. Measured on a paper
-    // whose seven numbered sections are all one size: `1 Introduction` >
-    // `2 Background` > `3 Model Architecture` > `4 Why Self-Attention`, each a
-    // child of the last, when all seven are peers. Popping every entry opened
-    // at a size no larger than this one makes equal sizes siblings by
-    // construction and makes a bigger heading close everything smaller.
+    // Bookmarks re-base the trail where their section starts; detected headings
+    // extend it, so a subsection halfway down a page, and front matter before the
+    // first bookmark, still get a path. The trail is a stack ordered by the size
+    // that opened each section: equal sizes are siblings and a larger heading
+    // closes everything smaller (an index-by-level trail nested equal sections in
+    // a staircase).
     let stack: TrailEntry[] = [];
     let trail: string[] = [];
     let currentBookmarkKey = "";
@@ -148,8 +97,9 @@ export class PdfFastParser implements DocumentParser {
       const lines = assembleLines(content.items).filter(
         (line) =>
           line.text.length > 0 &&
-          !analysis.runningText.has(normalise(line.text)) &&
-          !isPageNumberLine(line.text),
+          !analysis.isRunning(line, viewport.height) &&
+          !isPageNumberLine(line.text) &&
+          !isCitationMarkerLine(line.text),
       );
 
       const bookmark = trailByPage.get(pageNumber - 1);
@@ -212,27 +162,16 @@ export class PdfFastParser implements DocumentParser {
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
-        const level = headingLevelFor(line.size, analysis);
+        const level = analysis.headingLevel(line);
 
         if (level !== null) {
           const pending = flushParagraph();
           if (pending) yield pending;
 
-          // A heading set too wide for its measure wraps, and each line
-          // arrives separately. Left alone they become separate headings of
-          // equal size that nest into one another: a report cover reading
-          // "THE 9/11" / "COMMISSION" / "REPORT" produced three roots, and a
-          // journal title split across two lines put its SECOND half at the
-          // top of the outline.
-          //
-          // Same size, close together and running down the page is necessary
-          // but NOT sufficient — a section heading immediately above its first
-          // subheading looks identical by those tests, and merging those two
-          // destroys a real level of hierarchy. What separates them is shape.
-          // A line only wraps because it ran out of measure, so a wrapped
-          // heading is either justified (its first line reaches the right edge
-          // the page's text uses) or centred (its lines share an axis). Two
-          // sibling headings are left-aligned and short.
+          // A heading too wide for its measure wraps into several lines of the same
+          // style. They are one heading only if the first ran to the text's right edge
+          // (justified) or they share a centre; two short left-aligned headings in a row
+          // are a section and its first subsection.
           const group = [line];
           while (i + 1 < lines.length && group.length < HEADING_WRAP_MAX_LINES) {
             const previous = group[group.length - 1]!;
@@ -242,7 +181,7 @@ export class PdfFastParser implements DocumentParser {
             const ranToTheEdge = previous.x1 >= rightEdge - line.size;
             if (
               Math.abs(next.size - line.size) >= 0.5 ||
-              headingLevelFor(next.size, analysis) === null ||
+              !analysis.isHeadingStyle(next) ||
               gap <= 0 ||
               gap > line.size * HEADING_WRAP_GAP_RATIO ||
               !(centred || ranToTheEdge) ||
@@ -256,17 +195,20 @@ export class PdfFastParser implements DocumentParser {
           const text = joinWrapped(group);
 
           const top = stack.at(-1);
-          let opensAt = line.size;
+          // Compared at the 0.1pt precision styles are recognised at: a figure
+          // title set at 12.63pt must not outrank 12.60pt section headings.
+          const size = Math.round(line.size * 10) / 10;
+          let opensAt = size;
           let carried = text;
           if (top && namesSameSection(text, top.text)) {
             // The same section, printed. Keep whichever name is fuller — the
             // bookmark usually has the whole title where the page shows only
             // the line that fitted — and keep its authority.
             carried = top.text.length >= text.length ? top.text : text;
-            opensAt = Math.max(top.size, line.size);
+            opensAt = Math.max(top.size, size);
             stack.pop();
           } else {
-            while (stack.length > 0 && stack[stack.length - 1]!.size <= line.size) {
+            while (stack.length > 0 && stack[stack.length - 1]!.size <= size) {
               stack.pop();
             }
           }
@@ -317,12 +259,8 @@ export class PdfFastParser implements DocumentParser {
 }
 
 /**
- * Rejoin lines the PDF broke for layout.
- *
- * A hyphen at end of line is a soft break introduced by justification, so the
- * word is reassembled; otherwise a space is the right join. Shared with the
- * OCR parser, whose recognised lines wrap for exactly the same reason, so it
- * asks only for `.text`.
+ * Rejoin lines broken for layout, healing end-of-line hyphenation. Shared with
+ * the OCR parser.
  */
 export function joinWrapped(lines: readonly { text: string }[]): string {
   let out = "";
@@ -338,107 +276,32 @@ export function joinWrapped(lines: readonly { text: string }[]): string {
 }
 
 /**
- * Which heading tier a line's size puts it in, or null for body text.
- *
- * Membership of `headingSizes` used to be REQUIRED, which made detection a
- * function of what the sample happened to see: the 9/11 Commission Report's
- * chapter headings are 16pt on perhaps 5% of its 585 pages, so twenty samples
- * could miss the size entirely and silently demote every one of them to body
- * text. Size above body size is the test; the tier list only ranks it, and an
- * unsampled size takes the rank its magnitude earns.
+ * Learn the document's heading styles and running headers from its pages.
+ * See `pdfStructure.ts` for the rules.
  */
-function headingLevelFor(size: number, analysis: PageAnalysis): number | null {
-  if (!analysis.trustSizes) return null;
-  if (size < analysis.bodySize * HEADING_SIZE_RATIO) return null;
-  const exact = analysis.headingSizes.findIndex((s) => Math.abs(s - size) < 0.5);
-  const rank = exact === -1 ? analysis.headingSizes.filter((s) => s > size).length : exact;
-  return Math.min(6, rank + 1);
-}
-
-/**
- * Learn the body font size and the running header/footer text.
- *
- * Body size is weighted by character count rather than by line count: a page
- * has few headings but they are visually prominent, and weighting by lines
- * lets a heading-heavy contents page redefine what "body" means.
- */
-async function analysePages({ doc }: LoadedPdf): Promise<PageAnalysis> {
-  // Spread across the whole document, first and last page included. The
-  // stepping loop this replaced never reached the tail — 400 pages sampled 1,
-  // 21 … 381, and a 21-to-39-page document sampled only pages 1 to 20 — so a
-  // heading size used solely later on was never learned as a tier, and every
-  // such heading was silently demoted to body text. (`samplePageNumbers` gets
-  // the tail right but is deliberately sparse, because the probe pays to
-  // rasterise; this pass only reads text, so it can afford the density.)
-  const count = Math.min(ANALYSIS_SAMPLE, doc.numPages);
-  const sampled: number[] = [];
-  for (let i = 0; i < count; i++) {
-    sampled.push(1 + Math.round((i * (doc.numPages - 1)) / Math.max(1, count - 1)));
-  }
-
-  const weightBySize = new Map<number, number>();
-  /** Lines per size, alongside characters per size — the noise test counts lines. */
-  const linesBySize = new Map<number, number>();
-  const edgeCounts = new Map<string, number>();
-
-  for (const pageNumber of sampled) {
-    const page = await doc.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const lines = assembleLines(content.items);
-
-    for (const line of lines) {
-      const size = Math.round(line.size * 2) / 2;
-      weightBySize.set(size, (weightBySize.get(size) ?? 0) + line.text.length);
-      linesBySize.set(size, (linesBySize.get(size) ?? 0) + 1);
-    }
-    // Only the first and last lines can be a running header or footer.
-    for (const edge of [lines[0], lines.at(-1)]) {
-      if (!edge) continue;
-      const key = normalise(edge.text);
-      if (key.length < 3) continue;
-      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
-    }
-  }
-
-  const bodySize =
-    [...weightBySize.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 11;
-
-  const headingSizes = [...weightBySize.keys()]
-    .filter((s) => s >= bodySize * HEADING_SIZE_RATIO)
-    .sort((a, b) => b - a);
-
-  // Repeating on most sampled pages means it is furniture, not content. Needs
-  // enough samples to be meaningful, or a two-page document loses its title.
-  const threshold = Math.max(3, Math.ceil(sampled.length * 0.5));
-  const runningText = new Set(
-    [...edgeCounts.entries()]
-      .filter(([, count]) => count >= threshold)
-      .map(([key]) => key),
+async function analysePages({ doc }: LoadedPdf): Promise<StructureAnalysis> {
+  const count = Math.min(MAX_ANALYSED_PAGES, doc.numPages);
+  const pageNumbers = Array.from({ length: count }, (_, i) =>
+    count === doc.numPages ? i + 1 : 1 + Math.round((i * (doc.numPages - 1)) / Math.max(1, count - 1)),
   );
 
-  // Is the size signal worth believing at all? See MAX_TRUSTED_* above.
-  const headingLines = headingSizes.reduce((n, s) => n + (linesBySize.get(s) ?? 0), 0);
-  const perPage = headingLines / sampled.length;
-  const trustSizes =
-    headingSizes.length <= MAX_TRUSTED_TIERS || perPage <= MAX_TRUSTED_HEADINGS_PER_PAGE;
-  if (!trustSizes) {
-    log.warn(
-      `font sizes read as OCR noise (${headingSizes.length} heading tiers, ` +
-        `${perPage.toFixed(1)} heading lines per page); structure will come ` +
-        `from bookmarks alone`,
-    );
+  const pages = [];
+  for (const pageNumber of pageNumbers) {
+    const page = await doc.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pages.push({
+      height: page.getViewport({ scale: 1 }).height,
+      lines: assembleLines(content.items).filter(
+        (line) => !isPageNumberLine(line.text) && !isCitationMarkerLine(line.text),
+      ),
+    });
   }
-
-  return { bodySize, headingSizes, trustSizes, runningText };
+  return analyseStructure(pages);
 }
 
 /**
- * Resolve embedded bookmarks to a section trail per page index.
- *
- * Destinations are indirect references, so each has to be resolved through
- * getPageIndex. Entries that fail to resolve are skipped rather than fatal —
- * broken destinations are common in real files and are not worth refusing a
- * whole book over.
+ * Embedded bookmarks as a section trail per page index. Unresolvable
+ * destinations are skipped rather than failing the document.
  */
 export async function bookmarkTrails({ doc }: LoadedPdf): Promise<Map<number, string[]>> {
   const outline = await doc.getOutline().catch(() => null);

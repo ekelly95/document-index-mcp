@@ -1,7 +1,12 @@
 import * as z from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
-import { deleteDocument, getDocument, type DocumentRow } from "../db/documentsRepo.js";
+import {
+  deleteDocument,
+  getDocument,
+  ingestLeaseIsLive,
+  type DocumentRow,
+} from "../db/documentsRepo.js";
 import { describeError, fail, okStructured } from "./result.js";
 
 const inputSchema = z.object({
@@ -26,6 +31,7 @@ export function registerDeleteDocument(server: McpServer, ctx: AppContext): void
         "ingested by mistake — an edited file does NOT need this, because re-ingesting " +
         "one already replaces the version it supersedes. Deletion is permanent; the " +
         "document's chunk_ids stop resolving, and re-ingesting the file rebuilds it.",
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },
@@ -44,11 +50,11 @@ export function registerDeleteDocument(server: McpServer, ctx: AppContext): void
             return { ok: false, reason: `Unknown document_id "${args.document_id}".` };
           }
 
-          // 'processing' means a live writer owns this row (see beginIngest);
-          // deleting it underneath would leave that writer inserting chunks
-          // against a document that no longer exists. Refusing is instant and
-          // honest — waiting would mean blocking the call for a whole index.
-          if (doc.ingest_status === "processing") {
+          // A live 'processing' row has a writer (see beginIngest); deleting
+          // under it would leave that writer inserting against nothing. A row
+          // whose lease has expired has no writer — its process crashed — and
+          // would otherwise be undeletable until a restart reaps it.
+          if (doc.ingest_status === "processing" && ingestLeaseIsLive(doc)) {
             return {
               ok: false,
               reason:

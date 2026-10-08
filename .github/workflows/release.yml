@@ -21,7 +21,7 @@ permissions:
 
 env:
   # Same key and location as ci.yml, so a release run reuses the cached model
-  # rather than paying the 130MB download again.
+  # rather than paying the model download again.
   DOCUMENT_INDEX_MODEL_CACHE: ${{ github.workspace }}/.ci-models
 
 jobs:
@@ -49,7 +49,7 @@ jobs:
           path: ${{ env.DOCUMENT_INDEX_MODEL_CACHE }}
           # Must match ci.yml's key exactly, suffix included — see the comment
           # there for why the suffix exists.
-          key: bge-small-en-v1.5-tar7-${{ runner.os }}
+          key: bge-small-en-v1.5-hf-${{ runner.os }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -137,15 +137,8 @@ jobs:
       #
       # No asset is attached, deliberately. The archive above is a TEST — it
       # proves the `files` allowlist is right and that the package starts
-      # outside the development checkout — and it stops being one the moment it
-      # is published, because installing it is not a route this project has
-      # made safe. `npm install`ing that tarball resolves fastembed's own
-      # `tar: ^6.2.0` rather than the pinned 7, and tar 6.2.1 answers to
-      # GHSA-34x7-hfp2-rc4v (arbitrary file creation and overwrite via hardlink
-      # path traversal). That tar is what unpacks the 130MB model, which is
-      # fetched with no integrity check — so the two limits SECURITY.md records
-      # are not independent, and publishing the tarball is what joins them.
-      # Distribution is by cloning; the release is the tag and the notes.
+      # outside the development checkout. Distribution is by cloning, where the
+      # lockfile decides what gets installed; the release is the tag and notes.
       - name: Publish the release, with its changelog entry as the notes
         env:
           GH_TOKEN: ${{ github.token }}

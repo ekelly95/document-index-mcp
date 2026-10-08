@@ -60,8 +60,8 @@ was gone.
 
 **The suite does not download the model.** It runs against a hashing stub, which
 is why it takes seconds. Set `DOCUMENT_INDEX_TEST_REAL_MODEL=1` to run against
-the real one — about 130 MB, fetched once and cached — and do that if you touch
-anything in `src/embeddings/`, the fastembed patch or the model cache. CI covers
+the real one — about 65 MB, fetched once and cached — and do that if you touch
+anything in `src/embeddings/` or the model cache. CI covers
 it on one job and every release runs it. If you are touching OCR, the first
 scanned page fetches roughly 3 MB of language data; `--ocr-lang-path` points
 that at a local copy instead.

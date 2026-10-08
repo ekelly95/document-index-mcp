@@ -73,33 +73,26 @@ export function getDocument(db: Db, id: string): DocumentRow | undefined {
 }
 
 /**
- * Documents indexed from this library path whose content no longer matches.
- *
- * Editing a file changes its sha256, so a re-ingest produces a SECOND document
- * at the same path while the old one keeps ranking. This is the query that
- * finds the stale one. `COLLATE NOCASE` because macOS APFS is case-insensitive
- * but `realpath` does not canonicalise case there, so two spellings of one
- * path can reach the database.
+ * Other documents at this library path, i.e. earlier versions of an edited
+ * file. Case-insensitive only where the filesystem is (macOS `realpath` does
+ * not canonicalise case); on Linux `Notes.md` and `notes.md` are two files.
  */
 export function findStaleAtPath(
   db: Db,
   sourcePath: string,
   keepSha256: string,
+  caseInsensitive = process.platform === "win32" || process.platform === "darwin",
 ): DocumentRow[] {
   return db
     .prepare(
-      "SELECT * FROM documents WHERE source_path = ? COLLATE NOCASE AND sha256 <> ?",
+      `SELECT * FROM documents WHERE source_path = ? ${caseInsensitive ? "COLLATE NOCASE" : ""} AND sha256 <> ?`,
     )
     .all(sourcePath, keepSha256) as DocumentRow[];
 }
 
 /**
- * Reclaim an existing row for a fresh ingest attempt.
- *
- * The row is reused rather than replaced because sha256 is UNIQUE — the
- * previous attempt failed or was interrupted, and this clears every trace of
- * it. Setting `ingest_status = 'processing'` is what claims the document: see
- * the ownership rule in `src/ingest/runner.ts`.
+ * Reclaim a failed or interrupted document's row for a fresh attempt (sha256
+ * is UNIQUE). Setting 'processing' is the claim; see `beginIngest`.
  */
 export function restartIngest(
   db: Db,
@@ -171,14 +164,9 @@ export function setChunkCount(db: Db, id: string, count: number): void {
 }
 
 /**
- * How often a live ingest proves it is still alive, independent of progress.
- *
- * `setChunkCount` renews the lease as a side effect, but only per 64-chunk
- * batch — and a batch can legitimately take longer than the whole lease when
- * the work between chunks is slow, OCR being the motivating case. An expired
- * lease is not just cosmetic: `claimForIngest` would hand the document to a
- * second writer that deletes the first writer's chunks under it. One renewal
- * a minute keeps a live writer five times inside its five-minute lease.
+ * How often a live ingest renews its lease regardless of progress. A batch of
+ * OCR pages can outlast the whole lease, and an expired lease lets a second
+ * writer take the document over.
  */
 export const LEASE_RENEW_INTERVAL_MS = 60_000;
 
@@ -196,21 +184,10 @@ export function renewLease(db: Db, id: string): void {
 }
 
 /**
- * Publish a finished index, and evict whatever it supersedes, atomically.
- *
- * `supersede` carries the documents that used to occupy this source path. They
- * are deleted HERE rather than when the ingest was claimed, and that ordering
- * is the whole point: an ingest that fails after the claim — a parser throwing
- * halfway through, the embedder dying, the disk filling, the process being
- * killed — must leave the previous version of the file still searchable. The
- * old behaviour deleted first and committed, so any of those failures left the
- * library with no copy of that path at all.
- *
- * Both halves go in one transaction, so a reader never observes the gap: either
- * the old version is live and the new one is still 'processing' (and therefore
- * invisible to search), or the new one is 'ready' and the old one is gone.
- * better-sqlite3 nests via SAVEPOINT, so deleteDocument's own transaction
- * composes correctly inside this one.
+ * Publish a finished index and evict the versions it supersedes, in one
+ * transaction: before it commits the old version answers searches and the new
+ * one is invisible; after, only the new one exists. Eviction happens here, not
+ * at claim time, so a failed ingest never costs the previous version.
  */
 export function finalizeDocument(
   db: Db,
@@ -236,13 +213,8 @@ export function failDocument(db: Db, id: string, message: string): void {
 }
 
 /**
- * Abandon an ingest: drop whatever it wrote and record why, atomically.
- *
- * These were two separate statements, and the gap between them was a real
- * state: a crash after the chunks were deleted but before the status moved
- * left a document still claiming to be 'processing' with nothing in it —
- * indistinguishable from a live ingest that had not got going yet, and cleared
- * only when its lease eventually expired. One transaction removes the gap.
+ * Abandon an ingest: drop its chunks and record why, in one transaction, so a
+ * crash between the two cannot leave an empty 'processing' row behind.
  */
 export function failIngest(db: Db, id: string, message: string): void {
   db.transaction(() => {
@@ -252,12 +224,9 @@ export function failIngest(db: Db, id: string, message: string): void {
 }
 
 /**
- * Delete a document and everything derived from it.
- *
- * document_chunks goes by FK cascade, and its AFTER DELETE trigger clears the
- * FTS index. vec_chunks is a virtual table: no foreign key reaches it, so its
- * rows must be deleted explicitly or the vector index silently accumulates
- * orphans that still answer KNN queries.
+ * Delete a document and everything derived from it. Chunks and FTS go by
+ * cascade and trigger; vec_chunks is a virtual table no cascade reaches, so its
+ * rows are deleted explicitly or they keep answering KNN queries.
  */
 export function deleteDocument(db: Db, id: string): void {
   db.transaction((docId: string) => {
@@ -267,23 +236,10 @@ export function deleteDocument(db: Db, id: string): void {
 }
 
 /**
- * How long an `ingest_status = 'processing'` row is believed without evidence.
- *
- * The row IS the ingest claim, and `setChunkCount` refreshes `updated_at`
- * after every 64-chunk batch — roughly every three seconds at the measured
- * 50ms/chunk — so a live writer keeps its lease renewed by orders of
- * magnitude. A row that has not moved in five minutes has no writer.
- *
- * This exists because `processing` on its own cannot distinguish "someone is
- * working on this" from "someone died working on this", and the two need
- * opposite responses: leave the first strictly alone, clear the second.
- *
- * It is the defence, not a backstop to one. `processLock.ts` was once described
- * here as making a second writer impossible; it never could, and it no longer
- * tries — a host that starts two processes per server, as Claude Desktop does,
- * makes concurrent writers ordinary. What holds is this lease plus the
- * `BEGIN IMMEDIATE` transaction in `claimForIngest`, both of which are atomic
- * across processes. Weakening either reopens the defect the lock was blamed for.
+ * How long a 'processing' row is believed without being renewed. A live
+ * writer renews every batch and every minute; five quiet minutes means its
+ * process is gone. This lease plus the BEGIN IMMEDIATE claim is what lets
+ * several processes (Claude Desktop starts two) share one index safely.
  */
 export const INGEST_LEASE_MS = 5 * 60_000;
 
@@ -295,19 +251,10 @@ export function ingestLeaseIsLive(row: DocumentRow, now = Date.now()): boolean {
 }
 
 /**
- * Mark documents left mid-ingest by a crash or a host restart as failed.
- *
- * Called at startup, by the process holding the index lock and no other. A
- * 'processing' row whose writer is gone would otherwise advertise itself forever
- * as in progress, and its partial chunks would answer searches as though the
- * document were complete.
- *
- * Only expired leases are reclaimed. Clearing every `processing` row outright
- * would be correct only if this process were the sole writer, and it was
- * catastrophic when that assumption failed, because it deleted a live writer's
- * committed chunks in another process. The lease costs one comparison and
- * removes the whole class of failure — which is what makes it safe for peer
- * processes to share an index at all.
+ * Mark ingests abandoned by a crash as failed, so their partial chunks never
+ * answer searches and the file can be ingested again. Only expired leases are
+ * reclaimed: clearing every 'processing' row once deleted a live writer's work
+ * in another process.
  */
 export function recoverInterrupted(db: Db, now = Date.now()): number {
   const rows = db

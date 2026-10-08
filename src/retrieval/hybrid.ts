@@ -1,4 +1,4 @@
-import { byRowids, type HydratedChunkRow } from "../db/chunksRepo.js";
+import { byRowids, vectorsFor, type HydratedChunkRow } from "../db/chunksRepo.js";
 import type { Db } from "../db/sqlite.js";
 import { packVector } from "../db/sqlite.js";
 import type { Embedder } from "../embeddings/embedder.js";
@@ -12,20 +12,10 @@ import type { ChunkKind } from "../pipeline/ir.js";
 
 export interface FusionTuning {
   /**
-   * The RRF constant. It decides whether fusion rewards *agreement between the
-   * legs* or *conviction within one leg*, and the difference is not subtle.
-   *
-   * At the textbook k = 60 with ten candidates per leg, every rank from 1 to 10
-   * scores between 1/61 and 1/70 — a spread of 14%. Two legs each ranking a
-   * chunk tenth therefore sum to more than either leg ranking a chunk first, so
-   * the fusion is effectively voting on whether both legs found something at
-   * all. That is fine when both legs are competent and actively harmful when
-   * one is not: measured over the stress corpus, the lexical leg answers only
-   * 12% of paraphrased questions inside the top three, and at k = 60 its vote
-   * still dragged hybrid down from the semantic leg's 60% to 32%.
-   *
-   * Lowering k widens the gap between ranks, so a leg that is confident can
-   * outvote a leg that merely also saw the chunk.
+   * The RRF constant. Low k widens the gap between ranks, so a confident leg can
+   * outvote a leg that merely also saw the chunk; at the textbook k = 60 with ten
+   * candidates, ranks 1-10 score within 14% of each other and fusion degrades to
+   * voting on agreement.
    */
   k: number;
   /** Multiplier on the lexical leg's contribution. */
@@ -35,8 +25,8 @@ export interface FusionTuning {
 }
 
 /**
- * Tuned against `eval/questions.json` over the stress corpus, 2026-08-13,
- * on schema v4 embeddings (which carry the document title).
+ * Tuned against `eval/questions.json` over the stress corpus, 2026-08-13, with
+ * the document title in the embedded text (schema v4):
  *
  * |                          | R@1 | R@3 | R@5 |   MRR |
  * |--------------------------|-----|-----|-----|-------|
@@ -45,24 +35,10 @@ export interface FusionTuning {
  * | hybrid, `k = 60` (old)   | 32% | 59% | 68% | 0.465 |
  * | hybrid, this             | 43% | 64% | 66% | 0.548 |
  *
- * The bar was semantic-only, not lexical: hybrid beating the weaker leg it
- * contains proves nothing. The old default cleared neither.
- *
- * `k = 2, semantic x 2` scored a statistically identical 0.549 with a better
- * R@1 (45%) and a worse R@3 (61%). MRR could not separate them, so R@3 chose:
- * an agent reads the top few hits, not only the first, and the lighter semantic
- * weighting leaves more authority with the lexical leg on exact identifiers.
- *
- * Read the exact numbers with some suspicion — the configuration was chosen by
- * MRR on the same 56 questions it is scored against, so the peak is fitted, and
- * it moved once already when the embedding input changed. The *shape* is
- * steadier: every setting with `k <= 5` and `semanticWeight >= 1.5` scores
- * 0.525–0.549, a broad plateau well clear of both the old default and
- * semantic-only. It is the plateau that justifies the change; the exact summit
- * is a detail, and a held-out question set is the obvious next improvement.
- *
- * Run `pnpm eval --sweep` after touching anything that affects ranking — that
- * includes what goes into the embedded text, not only these constants.
+ * The exact peak is fitted to those questions; what justifies it is the
+ * plateau (every `k <= 5` with semantic weight >= 1.5 scores 0.525-0.549). Run
+ * `pnpm eval --sweep` after changing anything that affects ranking, including
+ * what goes into the embedded text.
  */
 export const DEFAULT_FUSION: FusionTuning = {
   k: 2,
@@ -71,42 +47,20 @@ export const DEFAULT_FUSION: FusionTuning = {
 };
 
 /**
- * DEVIATION from the source spec's flat OVERFETCH = 4, which applied every
- * filter after fusion over 4x k candidates. That does not survive contact with
- * a sparse filter: tables are ~2% of a typical corpus, so 4 x 10 = 40
- * candidates would yield about one table.
- *
- * The overfetch is per LEG, because the two legs are not equally capable.
- * document_id, kind and page_range go into the lexical leg's own SQL, so every
- * candidate it returns already satisfies them and a tight net is enough.
- *
- * The vector leg can pre-filter on document_id and nothing else — that is the
- * vec0 partition key, and vec_chunks carries no other column. An earlier
- * version of this comment claimed pushed-down filters "cost no overfetch at
- * all", which was true only of the lexical leg; with a 2x net a `kind: table`
- * query got essentially zero tables from the vector side, quietly degrading
- * hybrid search to lexical-only exactly when it was asked to be selective.
- * So anything that can only be applied after the KNN scan is paid for with a
- * much wider net instead. A vec0 scan costs the scan, not k, so raising k is
- * close to free.
+ * Overfetch is per leg. The lexical leg pushes document_id, kind, page_range
+ * and the ready check into its own SQL, so a tight net is enough; the vector leg
+ * can pre-filter only on document_id (the vec0 partition key), so anything else
+ * is paid for with a wider net. A vec0 scan costs the scan, not k.
  */
 const PUSHED_DOWN_OVERFETCH = 2;
 const POST_FILTER_OVERFETCH = 32;
+/** Reference lists are a minority of a corpus, so skipping them needs only a little slack. */
+const REFERENCE_EXCLUSION_OVERFETCH = 4;
 
 /**
- * How many times a leg may be re-run with a wider net before giving up.
- *
- * The overfetch above is a guess about how selective a filter is, and a guess
- * is all it can be: `kind: table` over a corpus of tables needs no widening,
- * and over a corpus with three tables in it no fixed multiple is enough. When
- * a leg comes back saturated — it returned exactly as many candidates as it
- * was asked for, so there were more — and the filters still left fewer than k
- * hits, the honest move is to ask for more rather than return a short list
- * that looks like an exhausted corpus.
- *
- * Bounded because each round costs another vec0 scan. Three doublings take the
- * vector leg from 32x to 256x, which for k=10 is 2,560 candidates: past that,
- * a filter is selective enough that the answer really is "few".
+ * How many times a saturated leg may be re-run with a doubled net when the
+ * filters left fewer than k hits. Three doublings take the vector leg to 256x;
+ * past that a filter is selective enough that "few" is the answer.
  */
 const MAX_ESCALATIONS = 3;
 
@@ -132,19 +86,43 @@ export interface HybridQuery {
 
 export interface Hit {
   row: HydratedChunkRow;
+  /** Fused rank score. Orders hits; says nothing about relevance on its own. */
   score: number;
   snippet: string;
+  /**
+   * Cosine similarity between the query and this chunk's embedding.
+   * Comparable across queries, unlike `score`. Null in lexical mode, where the
+   * query is never embedded.
+   */
+  similarity: number | null;
+  /** Whether full-text search matched the query's words in this chunk. */
+  lexicalMatch: boolean;
 }
 
 /**
- * Build a safe FTS5 MATCH expression.
- *
- * Raw user text cannot go in: `NEAR`, `*`, quotes and parentheses are all
- * operators, so a question containing an apostrophe or a hyphen would be a
- * syntax error rather than a search. Terms are extracted, quoted individually,
- * and joined with OR — natural-language queries share few exact terms with any
- * one passage, and implicit AND would return nothing for most of them. BM25
- * still ranks passages matching more, and rarer, terms above the rest.
+ * Below this best-hit similarity the library probably does not cover the
+ * question. Calibrated for bge-small-en-v1.5 on a real 11-chapter textbook
+ * library (2026-10): 25 on-topic questions scored 0.731-0.849, 15 off-topic
+ * ones 0.398-0.575, so this sits in the gap. A question near the library's
+ * subject but not answered by it will land around here; that is what "low"
+ * is for. Re-measure if the embedding model or embedded text changes.
+ */
+export const CONFIDENT_SIMILARITY = 0.65;
+
+export type Confidence = "high" | "low";
+
+/** How far to trust a result set, or null when there is no similarity to judge by. */
+export function assessConfidence(hits: readonly Hit[]): Confidence | null {
+  const sims = hits.map((h) => h.similarity).filter((s): s is number => s !== null);
+  if (sims.length === 0) return hits.length === 0 ? "low" : null;
+  return Math.max(...sims) >= CONFIDENT_SIMILARITY ? "high" : "low";
+}
+
+/**
+ * A safe FTS5 MATCH expression: terms extracted and quoted individually
+ * (quotes, hyphens and NEAR are operators), joined with OR because natural
+ * questions share few exact terms with any one passage. BM25 still ranks
+ * passages matching more, and rarer, terms first.
  */
 export function toFtsQuery(query: string): string {
   const terms = query.match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? [];
@@ -153,20 +131,10 @@ export function toFtsQuery(query: string): string {
 }
 
 /**
- * Does this section path sit under `prefix`?
- *
- * Compared segment by segment. The previous implementation joined the path
- * with " › " and called startsWith on the result, which made a filter of
- * "Part II" match every chunk under "Part III — Results" — the joined string
- * really does start with those characters. Comparing segments confines a
- * filter to the level it names.
- *
- * Within a segment the match is still a prefix, but one that has to end on a
- * word boundary. That keeps the convenience of typing a heading's opening
- * words — "Part II" finds "Part II — Methods", "3" finds both "3.1 Design" and
- * "3.2 Sampling" — without letting "Part II" swallow "Part III" or "3.2" reach
- * into "3.25". A caller can also paste a rendered location straight back in,
- * since describeLocation prints the same separator.
+ * Does this section path sit under `prefix`? Compared segment by segment, each
+ * a prefix ending on a word boundary, so "Part II" finds "Part II — Methods" but
+ * not "Part III", and "3" finds "3.1" but "3.2" does not reach "3.25". ">" is
+ * accepted for "›".
  */
 export function sectionPathMatches(
   sectionPath: readonly string[],
@@ -198,10 +166,7 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
   const match = toFtsQuery(q.query);
   if (!match) return { ids: [], snippets: new Map() };
 
-  // A document still being indexed is a partial corpus, and a hit from one is
-  // indistinguishable from a hit from a finished document. Restricting to
-  // 'ready' is what recoverInterrupted's comment already asks for on behalf of
-  // crashed ingests; it applies just as much to a live one.
+  // A document still indexing is a partial corpus; only 'ready' ones answer.
   const where: string[] = ["search_fts MATCH ?", "d.ingest_status = 'ready'"];
   const params: unknown[] = [match];
 
@@ -212,6 +177,8 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
   if (q.filter?.kind) {
     where.push("c.kind = ?");
     params.push(q.filter.kind);
+  } else {
+    where.push("c.kind <> 'references'");
   }
   if (q.filter?.pageRange) {
     where.push("c.page_number BETWEEN ? AND ?");
@@ -239,14 +206,12 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
   };
 }
 
-async function semanticLeg(
+function semanticLeg(
   db: Db,
-  embedder: Embedder,
+  vector: readonly number[],
   q: HybridQuery,
   limit: number,
-): Promise<number[]> {
-  const vector = await embedder.embedQuery(q.query);
-
+): number[] {
   // document_id is the vec0 partition key, so scoping to one document
   // pre-filters the KNN scan rather than discarding results afterwards.
   const scoped = q.documentId !== undefined;
@@ -269,14 +234,9 @@ async function semanticLeg(
 }
 
 /**
- * A ~300 character window centred on the passage's most query-relevant
- * sentence.
- *
- * DEVIATION from the source spec, which scored each sentence against the query
- * *embedding*. That would cost one model inference per sentence per hit —
- * measured at ~50ms each on this machine, so a 10-hit result set would take
- * several seconds. Term overlap is a cheap proxy that picks the same sentence
- * in the overwhelming majority of cases, and the fallback is the passage head.
+ * A ~300 character window centred on the passage's sentence with the most
+ * query terms. Term overlap rather than embedding each sentence, which would
+ * cost ~50ms per sentence per hit.
  */
 export function semanticSnippet(text: string, query: string, maxChars = 300): string {
   if (text.length <= maxChars) return text;
@@ -285,12 +245,8 @@ export function semanticSnippet(text: string, query: string, maxChars = 300): st
     (query.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? []),
   );
 
-  // matchAll rather than a running offset. The pattern needs a non-terminator
-  // to start a match, so it cannot match a LEADING run of ".!?" — text opening
-  // with an ellipsis skipped those characters entirely, and every offset
-  // accumulated afterwards was short by that much, sliding the window off the
-  // sentence it had chosen. Reading m.index makes the bookkeeping unnecessary
-  // rather than merely correct.
+  // matchAll, so each sentence's offset is read rather than accumulated (a
+  // leading "..." once threw every later offset off).
   const sentences = [...text.matchAll(/[^.!?]+[.!?]*/g)];
   if (sentences.length === 0) return `${text.slice(0, maxChars).trimEnd()}…`;
 
@@ -320,39 +276,37 @@ export async function hybridSearch(
   q: HybridQuery,
 ): Promise<Hit[]> {
   // What each leg cannot answer for itself, and therefore has to over-fetch
-  // against.
-  //
-  // The vector leg pre-filters on document_id and nothing else — that is the
-  // vec0 partition key and vec_chunks carries no other column — so kind,
-  // page_range, section_prefix and the ready check all cost it candidates.
-  //
-  // The lexical leg pushes document_id, kind, page_range and ready into its
-  // own SQL. It CANNOT push section_prefix: section paths are stored as a JSON
-  // array, so there is no column to compare against. An earlier version
-  // escalated only the vector leg for section_prefix while leaving this one at
-  // 2x, and the comment here claimed the lexical leg "already honours all of
-  // them" — it does not. A section-scoped query therefore handed 20 unfiltered
-  // candidates to a filter the leg knew nothing about while the vector leg got
-  // 1,600, and hybrid quietly degraded to semantic-only: the exact mirror of
-  // the failure the 32x constant was introduced to fix.
+  // against. The vector leg pre-filters on document_id only (the vec0
+  // partition key), so kind, page_range, section_prefix, the ready check and
+  // the default reference-list exclusion all cost it candidates. The lexical
+  // leg pushes everything but section_prefix (JSON, no column) into its SQL.
   const lexicalPostFiltered = q.filter?.sectionPrefix !== undefined;
-  const semanticPostFiltered =
+  const selective =
     q.filter !== undefined &&
     (q.filter.kind !== undefined ||
       q.filter.pageRange !== undefined ||
       q.filter.sectionPrefix !== undefined);
+  const excludesReferences = q.filter?.kind === undefined;
 
   let lexicalLimit = q.k * (lexicalPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
-  let semanticLimit = q.k * (semanticPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
+  let semanticLimit =
+    q.k *
+    (selective
+      ? POST_FILTER_OVERFETCH
+      : excludesReferences
+        ? REFERENCE_EXCLUSION_OVERFETCH
+        : PUSHED_DOWN_OVERFETCH);
+  const semanticPostFiltered = selective || excludesReferences;
+
+  // Embedded once, not once per escalation round.
+  const vector = q.mode !== "lexical" ? await embedder.embedQuery(q.query) : null;
 
   let hits: Hit[] = [];
   for (let round = 0; ; round++) {
     const lexical = q.mode !== "semantic"
       ? lexicalLeg(db, q, lexicalLimit)
       : { ids: [], snippets: new Map<number, string>() };
-    const semantic = q.mode !== "lexical"
-      ? await semanticLeg(db, embedder, q, semanticLimit)
-      : [];
+    const semantic = vector ? semanticLeg(db, vector, q, semanticLimit) : [];
 
     hits = fuseAndHydrate(db, q, lexical, semantic);
     if (hits.length >= q.k || round >= MAX_ESCALATIONS) break;
@@ -366,6 +320,20 @@ export async function hybridSearch(
 
     if (lexicalSaturated) lexicalLimit *= 2;
     if (semanticSaturated) semanticLimit *= 2;
+  }
+
+  if (vector) {
+    // Exact cosine from the stored vectors. Both sides are unit-normalised, so
+    // it is the dot product. This is the one number here that means the same
+    // thing from one query to the next.
+    const stored = vectorsFor(db, hits.map((h) => h.row.id));
+    for (const hit of hits) {
+      const v = stored.get(hit.row.id);
+      if (!v) continue;
+      let dot = 0;
+      for (let i = 0; i < v.length; i++) dot += v[i]! * vector[i]!;
+      hit.similarity = dot;
+    }
   }
 
   return hits;
@@ -412,17 +380,14 @@ function fuseAndHydrate(
   const ranked = fuseRankings(lexical.ids, semantic, q.fusion ?? DEFAULT_FUSION);
   if (ranked.length === 0) return [];
 
-  // The semantic leg is unfiltered beyond its partition, so its candidates
-  // still have to be checked. That happens in SQL during hydration rather than
-  // in the loop below: with the wide nets above, filtering afterwards would
-  // mean loading thousands of rows including their full text purely to discard
-  // them.
+  // The vector leg's candidates are filtered in SQL during hydration, so the
+  // wide nets above never load thousands of rows of text just to discard them.
   const rows = byRowids(
     db,
     ranked.map(([id]) => id),
     {
       readyOnly: true,
-      ...(q.filter?.kind === undefined ? {} : { kind: q.filter.kind }),
+      ...(q.filter?.kind === undefined ? { excludeKind: "references" as const } : { kind: q.filter.kind }),
       ...(q.filter?.pageRange === undefined ? {} : { pageRange: q.filter.pageRange }),
     },
   );
@@ -445,6 +410,8 @@ function fuseAndHydrate(
       row,
       score,
       snippet: lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query),
+      similarity: null,
+      lexicalMatch: lexical.snippets.has(id),
     });
     if (hits.length >= q.k) break;
   }

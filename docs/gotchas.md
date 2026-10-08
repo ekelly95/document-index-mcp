@@ -110,18 +110,31 @@ because each one is a trap that a reasonable change would walk straight back int
 - **PDF chunks tend to be one per page.** The boundary law forbids crossing a page, so a typical page of
   prose lands under the 350-token target and emits a single chunk. That is the design working, not a
   sizing bug.
-- **A heading is whatever is bigger than the body, and the section trail is a size-ordered stack.**
-  Not a tier index used as a tree depth — that was the bug. Popping every open section opened at a size
-  no larger than this heading makes equal-sized headings siblings; a bigger one closes everything
-  smaller. Requiring a size to appear in the sampled tier list was also wrong: chapter headings that
-  occupy 5% of a 585-page book can miss a 20-page sample entirely and were silently demoted to body
-  text, so the tier list now only *ranks* a heading and never gates one.
-- **Font size is a signal that can be absent, and a signal that can lie.** A scan carrying an OCR text
-  layer decodes fine, so it takes the fast route, where OCR's near-continuum of font sizes made almost
-  every line a heading. Above six heading tiers *and* three heading lines per sampled page, the sizes
-  are discarded and structure comes from bookmarks alone — the rule the OCR route always had. Measured
-  on a 408-page scan: 2,824 headings and 2,766 chunks averaging 65 tokens became 0 headings and 782
-  chunks averaging 228. The decision is logged, so a flat outline is never a mystery.
+- **A heading is a style, not a size, and the section trail is a size-ordered stack.** "Bigger than
+  body text" was the old test, and in a designed textbook most big text is infographic and table
+  labelling at a dozen sizes. A style — a (size, font) pair at 0.1pt — is trusted only when its lines
+  read like headings, it recurs across pages, and it introduces body text (`pdfStructure.ts`). The
+  stack pops every open section opened at a size no larger than the new heading, compared at that
+  same 0.1pt: compared raw, a 12.63pt figure title outranked 12.60pt section headings and adopted the
+  rest of a chapter. Every page is analysed (up to 600), because a chapter-heading style can occupy 5%
+  of a book and a 20-page sample missed it.
+- **The old OCR-noise guard switched headings off for real textbooks.** It discarded font sizes above
+  six tiers and three heading lines per page, which a 408-page OCR'd scan exceeded — and so did six of
+  eleven typeset NCSF chapters, which then indexed with no structure at all. The style rule covers the
+  scan without it: an OCR layer's "large" lines are sentences, so no style passes the plausibility
+  test. The `font sizes that read as OCR noise` test in `pdf.test.ts` still pins that.
+- **A chunk's embedding is truncated from the END, silently.** Title, section path and overlap are
+  prepended, and the model keeps its first 400 tokens. Sized by chars/4 alone, 19% of a real library's
+  chunks lost an average of 63 tokens of their own text. `fitToBudget` re-checks every chunk with the
+  model's tokenizer, and `fitEmbedInput` drops context before text. Changing what is embedded means
+  re-checking both.
+- **pdfjs writes a space as its own text item.** Filter items with `str.trim()` and those spaces vanish;
+  geometry alone misses narrow ones ("forChromium"). `groupByBaseline` keeps them as word breaks.
+- **tesseract.js 7 cannot report a failed language load.** With an `errorHandler` set, `createWorker`
+  never settles when the traineddata fetch fails — an offline first scan, or a mistyped `--ocr-lang`,
+  hung forever with its lease renewed by timer, blocking every ingest queued behind it.
+  `stageLanguageData` downloads into the cache first, with a timeout, so a worker only ever reads a
+  file that is already there.
 - **Sideways text is furniture.** A rotated run's `transform[0]` is ≈0, so its size fell back to the
   glyph box's *width*: arXiv's margin stamp measured 20pt on a paper whose title is 14.5pt, outranking
   it and filing the whole paper under a submission identifier. It also claimed its 300pt vertical

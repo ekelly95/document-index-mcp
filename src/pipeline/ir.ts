@@ -1,11 +1,7 @@
 /**
- * The Block IR — the single contract every parser compiles to.
- *
- * This is the keystone of format-agnosticism. Each parser is a format expert
- * whose only job is to emit a stream of DocBlocks; the chunker, the outline
- * builder and the retrieval layer never learn what format a document came
- * from. Adding a format is one new file in parsers/ plus one branch in
- * router.ts, and nothing downstream changes.
+ * The Block IR: the one contract every parser compiles to. The chunker, the
+ * outline builder and retrieval never learn what format a document came from,
+ * so a format is one parser plus one router branch.
  */
 
 export type BlockKind =
@@ -64,28 +60,16 @@ export interface DocumentMetadata {
   /** page / section count. */
   locatorCount: number;
   /**
-   * Set when the parser knows it is skipping real content. Persisted on the
-   * document row so the incompleteness stays visible after the ingest reply —
-   * a document must never look more indexed than it is.
-   *
-   * No parser sets this today: its only producer was the PPTX reader, which
-   * warned about unread chart data and was removed with the format. The
-   * channel is kept because it is the general way a parser admits partial
-   * coverage, and because retiring the column would need a schema bump — which
-   * costs a full re-ingest of every library, OCR included, to delete a
-   * nullable field.
+   * Set when the parser knows it skipped real content; persisted so the
+   * document never looks more indexed than it is. No parser sets it today (its
+   * only producer was the removed PPTX reader).
    */
   warning?: string;
 }
 
 /**
- * One opened document, read from disk exactly once.
- *
- * Parsers take this rather than a path so that the bytes a document is hashed
- * from are provably the bytes it is indexed from. Given a path, each stage
- * opened the file again — hash, sniff, probe, metadata, parse — and a file
- * edited between two of those reads produced an index whose contents and whose
- * sha256 came from different revisions. See `source.ts`.
+ * One opened document, read from disk once. Parsers take this rather than a
+ * path so the bytes hashed are provably the bytes indexed. See `source.ts`.
  */
 export interface DocumentSource {
   /** Absolute on-disk path. For diagnostics and basename-derived titles. */
@@ -97,13 +81,8 @@ export interface DocumentSource {
   /** `bytes` decoded as UTF-8. Decoded once and reused. */
   text(): string;
   /**
-   * Memoise a format-specific derived resource under `key`, building it at
-   * most once per source and disposing it on `close()`.
-   *
-   * This is how a PDF gets parsed by pdfjs one time instead of three. The IR
-   * stays format-blind — it memoises an opaque value it never looks inside —
-   * while `loadPdf` gets to be called freely from the probe, the metadata pass
-   * and the parse without any of them coordinating.
+   * Memoise a format-specific resource (a pdfjs document) under `key`, built at
+   * most once per source and disposed on `close()`.
    */
   derive<T>(
     key: string,
@@ -115,13 +94,8 @@ export interface DocumentSource {
 }
 
 /**
- * Every parser implements exactly this.
- *
- * `parse` is an AsyncIterable rather than a returned array so the chunker
- * consumes blocks as they are produced and the embedder batches behind it,
- * instead of the whole block stream being materialised first. Note that this
- * bounds the BLOCKS, not the source: `DocumentSource` holds the file in
- * memory, which every parser here needed anyway.
+ * Every parser implements this. `parse` is an AsyncIterable so chunking and
+ * embedding proceed while blocks are produced.
  */
 export interface DocumentParser {
   parse(src: DocumentSource): AsyncIterable<DocBlock>;
@@ -133,7 +107,7 @@ export interface DocumentParser {
  * into "text" because retrieval only cares about the distinctions that are
  * worth filtering on.
  */
-export type ChunkKind = "text" | "table" | "code" | "list" | "heading";
+export type ChunkKind = "text" | "table" | "code" | "list" | "heading" | "references";
 
 export function toChunkKind(kind: BlockKind): ChunkKind {
   switch (kind) {

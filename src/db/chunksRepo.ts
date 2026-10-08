@@ -133,6 +133,8 @@ export interface RowidFilter {
   /** Drop chunks of documents that are not finished indexing. */
   readyOnly?: boolean;
   kind?: ChunkKind;
+  /** Leave this kind out; how search skips reference lists unless asked. */
+  excludeKind?: ChunkKind;
   pageRange?: readonly [number, number];
 }
 
@@ -167,6 +169,10 @@ export function byRowids(
     where.push("c.kind = ?");
     params.push(filter.kind);
   }
+  if (filter.excludeKind) {
+    where.push("c.kind <> ?");
+    params.push(filter.excludeKind);
+  }
   if (filter.pageRange) {
     where.push("c.page_number BETWEEN ? AND ?");
     params.push(filter.pageRange[0], filter.pageRange[1]);
@@ -183,7 +189,29 @@ export function byRowids(
   return new Map(rows.map((r) => [r.id, r]));
 }
 
-/** Row-count reconciliation across the three indexes. Used by tests and the CLI. */
+/**
+ * Stored vectors for some chunks, by rowid. vec0 answers a point lookup on its
+ * primary key; a handful per search is cheap.
+ */
+export function vectorsFor(db: Db, ids: readonly number[]): Map<number, Float32Array> {
+  const lookup = db.prepare("SELECT embedding FROM vec_chunks WHERE chunk_rowid = ?");
+  const out = new Map<number, Float32Array>();
+  for (const id of ids) {
+    const row = lookup.get(vecRowid(id)) as { embedding: Buffer } | undefined;
+    if (!row) continue;
+    const bytes = row.embedding;
+    out.set(id, new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+  }
+  return out;
+}
+
+/**
+ * Row-count reconciliation across the three indexes. Used by tests and the CLI.
+ *
+ * FTS is counted from `search_fts_docsize`, the rows actually indexed. A
+ * `count(*)` on an external-content FTS table reads the content table, so it
+ * always equals the chunk count and could never disagree.
+ */
 export function indexCounts(db: Db): {
   chunks: number;
   fts: number;
@@ -192,7 +220,7 @@ export function indexCounts(db: Db): {
   const one = (sql: string) => (db.prepare(sql).get() as { c: number }).c;
   return {
     chunks: one("SELECT count(*) AS c FROM document_chunks"),
-    fts: one("SELECT count(*) AS c FROM search_fts"),
+    fts: one("SELECT count(*) AS c FROM search_fts_docsize"),
     vectors: one("SELECT count(*) AS c FROM vec_chunks"),
   };
 }

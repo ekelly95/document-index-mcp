@@ -22,11 +22,9 @@ updates:
     labels:
       - dependencies
 
-  # pnpm-workspace.yaml carries an `overrides` entry forcing fastembed onto a
-  # patched `tar`, plus a matching patch file. Dependabot does not read either.
-  # If it ever proposes a fastembed bump, `pnpm install` will fail with
-  # UNUSED_PATCH rather than silently dropping the override — read the comment
-  # in pnpm-workspace.yaml before merging that one.
+  # A fastembed bump that changes the model download will fail the pinned-hash
+  # check in src/embeddings/embedder.ts (MODEL_FILE_SHA256) in the real-model
+  # job. That is the point: re-pin only after confirming the new files.
   - package-ecosystem: npm
     directory: /
     schedule:

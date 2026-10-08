@@ -10,12 +10,8 @@ import { DEFAULT_INGEST_CONCURRENCY } from "./ingest/queue.js";
 export const DEFAULT_OCR_WORKERS = 2;
 
 /**
- * The largest file the server will read, in megabytes.
- *
- * Generous on purpose: the biggest thing measured against this project is a
- * 408-page scan, and the ceiling exists to stop an unbounded read rather than
- * to express an opinion about documents. A library holding something larger
- * raises it and knows why.
+ * The largest file the server will read, in megabytes. Generous: it stops an
+ * unbounded read, not an unusual document.
  */
 export const DEFAULT_MAX_FILE_MB = 512;
 
@@ -24,7 +20,7 @@ export interface ServerConfig {
   libraryRoot: string;
   /** Single SQLite file holding documents, chunks, FTS index and vectors. */
   dbPath: string;
-  /** Where fastembed caches the ONNX model (~130MB, downloaded once). */
+  /** Where fastembed caches the ONNX model (~65MB, downloaded once). */
   modelCacheDir: string;
   /** Documents indexed at once, process-wide. See `ingest/queue.ts`. */
   ingestConcurrency: number;
@@ -45,23 +41,29 @@ export interface ServerConfig {
 }
 
 /**
- * Resolve configuration from flags or environment.
- *
- * As in obsidian-mcp, there is deliberately no fallback to process.cwd() for
- * the library root. A server that silently treats whatever directory it
- * happens to start in as the library is one misconfigured host away from
- * indexing an unrelated project.
- *
- * The database and model cache DO default, since both are derived artefacts
- * that are rebuildable and carry no risk if they land in the wrong place.
+ * Resolve configuration from flags or environment. There is no fallback to
+ * process.cwd() for the library: a misconfigured host would index whatever
+ * directory it started in. The database and model cache do default, being
+ * rebuildable.
  */
-export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig {
+/**
+ * `--key=value` flags. Split on the FIRST `=` only: `split("=", 2)` drops
+ * everything after a second one, which truncates a path like `C:\a=b`.
+ */
+export function parseFlags(argv: readonly string[]): Map<string, string> {
   const flags = new Map<string, string>();
   for (const arg of argv) {
     if (!arg.startsWith("--")) continue;
-    const [key, value] = arg.slice(2).split("=", 2);
-    if (key) flags.set(key, value ?? "true");
+    const body = arg.slice(2);
+    const eq = body.indexOf("=");
+    const key = eq === -1 ? body : body.slice(0, eq);
+    if (key) flags.set(key, eq === -1 ? "true" : body.slice(eq + 1));
   }
+  return flags;
+}
+
+export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig {
+  const flags = parseFlags(argv);
 
   const raw = flags.get("library") ?? process.env["DOCUMENT_INDEX_LIBRARY_PATH"];
   if (!raw) {
@@ -81,33 +83,14 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     throw new Error(`Library path is not a directory: ${requestedRoot}`);
   }
 
-  /*
-   * Canonical from here on, and that is load-bearing rather than tidy.
-   *
-   * `assertRealPathInside` returns a file's realpath, and `beginIngest` then
-   * asks `libraryRelative` for that file's path relative to this root. If the
-   * root still holds a symlink or a short name while the file has been
-   * resolved, the two are in different spellings of the same place and
-   * `path.relative` between them climbs out and back: `source_path` becomes
-   * something like `../../private/var/.../note.md` instead of `note.md`. One
-   * file then fails to match itself on re-ingest, so an edited document is
-   * never superseded and a library path can hold two rows.
-   *
-   * Not hypothetical, and not visible on Linux, which is why it survived: it
-   * needs a root that is not already canonical. macOS `/tmp` is `/private/tmp`
-   * and its `os.tmpdir()` sits under `/var` -> `/private/var`; Windows hands
-   * out 8.3 names like `RUNNER~1`. CI found it on both the first time it ran,
-   * while Linux passed, because `/tmp` there is real.
-   *
-   * Resolving once, here, is what keeps every later comparison in one spelling.
-   *
-   * `.native` is not optional, and plain `realpathSync` is the trap. On Windows
-   * the two disagree: `fs.realpathSync("C:/PROGRA~1")` hands back `C:\PROGRA~1`
-   * unchanged, while `fs.realpathSync.native` and the `fs/promises` `realpath`
-   * that `assertRealPathInside` uses both give `C:\Program Files`. Resolving
-   * with the plain form therefore fixed macOS and left Windows exactly as
-   * broken as before — which is how this was found the second time. Whatever
-   * this uses has to match what `security/paths.ts` uses.
+  /**
+   * Canonical from here on. `beginIngest` stores a file's path relative to this
+   * root, and the file's own path has been through realpath; if the root has not,
+   * the two are different spellings of one place (macOS /var -> /private/var,
+   * Windows 8.3 names) and `path.relative` climbs out and back, so a file stops
+   * matching its own row. `.native` matters: on Windows plain `realpathSync`
+   * leaves 8.3 names alone while the promises `realpath` used by
+   * `security/paths.ts` expands them. See docs/gotchas.md.
    */
   const libraryRoot = fs.realpathSync.native(requestedRoot);
 
@@ -175,14 +158,9 @@ export function loadConfig(argv: string[] = process.argv.slice(2)): ServerConfig
     flags.get("ocr-lang-path") ?? process.env["DOCUMENT_INDEX_OCR_LANG_PATH"];
   let ocrLangPath: string | undefined;
   if (rawLangPath !== undefined) {
-    // Not run through security/paths.ts. That jail wants a library-relative
-    // path with a document extension; this is a directory deliberately outside
-    // the library, supplied by whoever writes the host config — the same trust
-    // level as --library and --models, neither of which is jailed either.
-    //
-    // It is checked eagerly all the same. The alternative is a worker rejecting
-    // with ENOENT at the first scanned page, which can be many minutes into an
-    // ingest, and reporting it as an OCR failure rather than a typo.
+    // Not jailed: like --library and --models it comes from whoever writes the
+    // host config. Checked now rather than failing at the first scanned page,
+    // minutes into an ingest.
     ocrLangPath = path.resolve(rawLangPath);
     let langStat: fs.Stats;
     try {

@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "./context.js";
 import { registerSearchDocument } from "./tools/searchDocument.js";
@@ -16,8 +17,13 @@ import { registerDeleteDocument } from "./tools/deleteDocument.js";
  * body text, and it is capped — and delete_document does not widen it, since
  * it returns no document content at all.
  */
+/** One source of truth for the version a client sees: package.json, beside dist/. */
+export const SERVER_VERSION = (
+  createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
+
 export function buildServer(ctx: AppContext): McpServer {
-  const server = new McpServer({ name: "document-index-mcp", version: "0.1.0" });
+  const server = new McpServer({ name: "document-index-mcp", version: SERVER_VERSION });
 
   registerSearchDocument(server, ctx);
   registerGetDocumentOutline(server, ctx);

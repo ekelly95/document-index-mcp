@@ -3,6 +3,30 @@
 What is built, what was cut, and what is still wrong. The phase numbers record the order things were
 promised in, not the order they landed.
 
+## October 2026: an audit against a real library
+
+Everything above was measured on a stress corpus. Run against the library actually in use — eleven
+designed sport-nutrition textbook chapters, 840 chunks — retrieval had problems the corpus never
+showed. Before and after, on the same eleven PDFs:
+
+| | Before | After |
+|---|---:|---:|
+| Chapters with no section structure at all | 6 | 0 |
+| Chunks with no section path | 360 | 57 (front matter) |
+| Chunks whose tail was cut off before embedding | 158 (19%) | 0 |
+| Fragments under 30 tokens (running headers, citation markers, labels) | 69 | 15 (cover pages) |
+| Reference-list chunks competing in search | all | 0 (tagged, opt-in) |
+| Off-topic query flagged as such | never | 15 of 15 |
+
+What changed, with the reasoning in `docs/gotchas.md`: PDF headings are recognised by style rather
+than size; running headers by position and word set; explicit space items are kept; fragments merge
+into a neighbour on the same page; chunks are re-split against the model's own tokenizer; reference
+lists are tagged `references`; search reports similarity and confidence; `pnpm reindex` rebuilds an
+index keeping titles. Also fixed: a hang when OCR language data cannot load, OCR workers held for the
+server's lifetime, docx content controls and localized heading styles, a Linux case-folding eviction,
+and a dead-lease row that could never be deleted. fastembed 3 moved the model download to Hugging Face
+(byte-identical weights), and the model is now pinned by SHA-256.
+
 ## Cut on 2026-08-13: EPUB and PowerPoint
 
 Both had working, tested parsers. Both were deleted rather than finished — the most consequential
@@ -64,9 +88,8 @@ may never fire. Lifecycle events and failures go to stderr, since a failed backg
 leave no trace anywhere a person would look.
 
 Still open, in value order: startup reconciliation of chunk/FTS/vector counts (`indexCounts()`
-already exists and is called only by the CLI), a `search_fts` rebuild command, schema-migration
-scaffolding (the v1→v2 bump for `ts-ocr` shipped without it — the index is derived data, so the
-migration is delete-and-re-ingest, and `openDatabase` says so). None of them block EPUB.
+already exists and is called only by the CLIs) and a `search_fts` rebuild command. Schema changes are
+answered by `pnpm reindex` (October 2026).
 
 **The fast/real-model test split is done.** The end-to-end file was the only thing loading the
 130MB ONNX model, and at 11.1 of the suite's 12 seconds it was most of what a test run cost — paid
@@ -77,8 +100,8 @@ assertions still mean what they say. That file went 11.1s to 1.7s and the suite 
 the long pole is now real OCR, which is worth what it costs.
 
 `DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs it against the real model. CI does that on one job rather
-than six, and the release workflow always does — a stub cannot stand in for the download, the tar
-extract the fastembed patch touches, or ONNX loading, and those breaking means every new user's
+than six, and the release workflow always does — a stub cannot stand in for the download, the
+pinned-hash check, or ONNX loading, and those breaking means every new user's
 first ingest fails.
 
 **Cross-process is now closed** — it used to be the one real gap. `recoverInterrupted` reset *every*
@@ -230,20 +253,21 @@ document 1.5 MB whether it held three chunks or a thousand — the mechanism and
 falling from 14.5 MB to 0.7 MB. A small-document library improves by far more, since the waste was
 per file.
 
-**The largest known defect: search cannot say it found nothing.** `search_document`'s `score` is an
-RRF fusion value — it orders results and does not measure relevance — so `k` hits come back whatever
-was asked. Demonstrated on the real library: the query `zzzq purple elephant tractor lambda` returned
-five ranked passages with page numbers, indistinguishable in shape from five right answers. An agent
-asking about a topic the library does not cover gets confident-looking material and no signal to
-distrust it, which is precisely the failure the PDF probe and the empty-document refusal exist to
-prevent everywhere else in the pipeline. A threshold needs a measure that is comparable across
-queries, so it needs either a calibrated score or a second-stage reranker. This should be the next
-thing built.
+**Closed in October 2026: search can now say it found nothing.** This was the largest known defect:
+the RRF score orders results and measures nothing, so the query `zzzq purple elephant tractor lambda`
+came back as five confident page-cited passages. Hits now carry the cosine similarity of query and
+passage, computed exactly from the stored vectors, and `search_document` reports `confidence`. On the
+NCSF library 25 on-topic questions scored 0.731–0.849 and 15 off-topic ones 0.398–0.575 (the zzzq
+query: 0.491), so the threshold sits at 0.65. A question near the library's subject that it does not
+actually answer will land close to the line; that is what "low" is for. The calibration is per
+embedding model, and anything that changes the embedded text should be re-measured.
 
-**Other loose ends.** There is still no schema migration: every bump is delete-and-re-ingest, which
-has now been paid twice and costs an OCR re-run each time. The embedding model is downloaded on first
-run with no integrity check, and `bge-small-en-v1.5` is English-only, so a multilingual library
-retrieves poorly. Two intentional copies of one file cannot coexist as separate library entries,
+**Other loose ends.** Schema bumps are rebuilt rather than migrated, now by `pnpm reindex`, which keeps
+titles; it still costs an OCR re-run for scanned books. `bge-small-en-v1.5` is English-only, so a
+multilingual library retrieves poorly. PDF tables are read as prose: no PDF chunk is ever kind
+`table`, so `filter.kind: "table"` only finds Markdown and Word tables. The retrieval eval set covers
+the stress corpus, which is not on the development machine as of October 2026; the NCSF calibration
+above is the only measurement on a real library. Two intentional copies of one file cannot coexist as separate library entries,
 because sha256 is the document identity — which also means the same note held as both `.md` and
 `.pdf` indexes twice and halves the diversity of a top-5.
 Embedding runs ~50ms/chunk on CPU, so a 400-page book takes ~105s to index; acceptable for

@@ -13,7 +13,7 @@ import {
   EMBEDDING_MODEL_NAME,
 } from "../embeddings/embedder.js";
 import type { ChunkKind } from "../pipeline/ir.js";
-import { hybridSearch } from "./hybrid.js";
+import { assessConfidence, CONFIDENT_SIMILARITY, hybridSearch, type Hit } from "./hybrid.js";
 
 /**
  * hybridSearch itself: fusion, overfetch selection and filter pushdown.
@@ -245,4 +245,48 @@ test("every hit carries a snippet, from whichever leg found it", async () => {
   const semantic = await search({ query: "badgers", k: 5, mode: "semantic" });
   assert.ok(semantic[0]!.snippet.length > 0);
   assert.ok(semantic[0]!.snippet.length <= 400, "semantic snippet was not bounded");
+});
+
+test("reference lists are left out unless asked for by kind", async () => {
+  seed("paper", [
+    { text: "rank01 caffeine improves endurance performance in trained cyclists" },
+    { text: "rank02 caffeine intake and muscle strength: a systematic review", kind: "references" },
+  ]);
+
+  const plain = await search({ query: "caffeine", k: 10, mode: "hybrid" });
+  assert.deepEqual(textsOf(plain), ["rank01 caffeine improves endurance performance in trained cyclists"]);
+
+  const refs = await search({ query: "caffeine", k: 10, mode: "hybrid", filter: { kind: "references" } });
+  assert.deepEqual(textsOf(refs), ["rank02 caffeine intake and muscle strength: a systematic review"]);
+});
+
+test("hits carry a similarity in hybrid mode, none in lexical, and say whether words matched", async () => {
+  seed("doc", [{ text: "rank01 badgers dig setts" }, { text: "rank02 unrelated passage" }]);
+
+  const hybrid = await search({ query: "badgers", k: 10, mode: "hybrid" });
+  assert.ok(hybrid.every((h) => typeof h.similarity === "number"));
+  assert.deepEqual(
+    hybrid.map((h) => [h.row.text, h.lexicalMatch]),
+    [
+      ["rank01 badgers dig setts", true],
+      ["rank02 unrelated passage", false],
+    ],
+  );
+
+  const lexical = await search({ query: "badgers", k: 10, mode: "lexical" });
+  assert.ok(lexical.length > 0 && lexical.every((h) => h.similarity === null));
+});
+
+test("confidence follows the best similarity, and is unknown without one", () => {
+  const hit = (similarity: number | null): Hit => ({
+    row: {} as Hit["row"],
+    score: 1,
+    snippet: "",
+    similarity,
+    lexicalMatch: false,
+  });
+  assert.equal(assessConfidence([hit(0.3), hit(CONFIDENT_SIMILARITY + 0.01)]), "high");
+  assert.equal(assessConfidence([hit(0.3), hit(CONFIDENT_SIMILARITY - 0.01)]), "low");
+  assert.equal(assessConfidence([hit(null)]), null);
+  assert.equal(assessConfidence([]), "low");
 });

@@ -16,10 +16,24 @@ export type DocxBlockSpec =
   | { paragraph: string; note?: DocxNoteSpec }
   | { quote: string }
   | { bullets: (string | { text: string; level: number; note?: DocxNoteSpec })[] }
-  | { table: string[][] };
+  | { table: string[][] }
+  /** A paragraph carrying an arbitrary style id, e.g. a localized heading. */
+  | { styled: string; style: string }
+  /** Blocks wrapped in a body-level content control (`w:sdt`). */
+  | { sdt: DocxBlockSpec[] };
+
+/** One `w:style` entry for word/styles.xml. */
+export interface DocxStyleSpec {
+  id: string;
+  name: string;
+  basedOn?: string;
+  outlineLvl?: number;
+}
 
 export interface DocxFixtureSpec {
   dcTitle?: string;
+  /** When present, a word/styles.xml is written with these paragraph styles. */
+  styles?: DocxStyleSpec[];
   blocks: DocxBlockSpec[];
 }
 
@@ -72,6 +86,11 @@ function blockXml(block: DocxBlockSpec, notes: NoteAllocator): string {
     );
   }
   if ("paragraph" in block) return para(block.paragraph, "", notes.ref(block.note));
+  if ("styled" in block) return para(block.styled, `<w:pStyle w:val="${esc(block.style)}"/>`);
+  if ("sdt" in block) {
+    const inner = block.sdt.map((b) => blockXml(b, notes)).join("");
+    return `<w:sdt><w:sdtPr/><w:sdtContent>${inner}</w:sdtContent></w:sdt>`;
+  }
   if ("quote" in block) return para(block.quote, `<w:pStyle w:val="Quote"/>`);
   if ("bullets" in block) {
     return block.bullets
@@ -130,6 +149,22 @@ export function buildDocx(spec: DocxFixtureSpec): Buffer {
     overrides.push(
       `<Override PartName="/${part}" ContentType="application/vnd.openxmlformats-officedocument.` +
         `wordprocessingml.${kind}s+xml"/>`,
+    );
+  }
+
+  if (spec.styles !== undefined) {
+    const styleXml = spec.styles
+      .map(
+        (st) =>
+          `<w:style w:type="paragraph" w:styleId="${esc(st.id)}"><w:name w:val="${esc(st.name)}"/>` +
+          (st.basedOn ? `<w:basedOn w:val="${esc(st.basedOn)}"/>` : "") +
+          (st.outlineLvl === undefined ? "" : `<w:pPr><w:outlineLvl w:val="${st.outlineLvl}"/></w:pPr>`) +
+          `</w:style>`,
+      )
+      .join("");
+    files["word/styles.xml"] = strToU8(xml(`<w:styles xmlns:w="${NS_W}">${styleXml}</w:styles>`));
+    overrides.push(
+      `<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`,
     );
   }
 

@@ -1,24 +1,70 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { Tokenizer } from "@anush008/tokenizers";
 import { EmbeddingModel, FlagEmbedding } from "fastembed";
 import { MAX_TOKENS } from "../pipeline/chunker.js";
+import { estimateTokens, takeLastTokens } from "../util/tokens.js";
 
 /**
  * bge-small-en-v1.5, 384 dimensions, via fastembed (ONNX Runtime on CPU).
  *
- * The model is ~130MB and is downloaded on first use, then cached. Not from
- * HuggingFace, despite `fastembed` depending on `@huggingface/hub`: that import
- * serves the sparse-embedding path, which this build never calls. The URL is
- * `storage.googleapis.com/qdrant-fastembed/<model>.tar.gz`.
- *
- * This is one of the server's two network calls — the other is tesseract.js
- * fetching OCR language data on the first scanned PDF. The source spec's claim
- * that "no outbound network calls remain anywhere" is true only of query time,
- * not of first run.
+ * Downloaded once on first use (~65 MB) from huggingface.co/Qdrant/bge-small-en-v1.5-onnx-Q
+ * and cached. One of the server's two network calls; the other is OCR language
+ * data on the first scanned PDF.
  */
 
 export const EMBEDDING_MODEL = EmbeddingModel.BGESmallENV15;
+/**
+ * Recorded in the index so vectors from different models are never mixed.
+ * fastembed 3 moved the download from GCS to Hugging Face, but the weights are
+ * byte-identical (see MODEL_FILE_SHA256), so the name is unchanged.
+ */
 export const EMBEDDING_MODEL_NAME = "fast-bge-small-en-v1.5";
 export const EMBEDDING_DIM = 384;
 const BATCH_SIZE = 64;
+
+/** Where fastembed 3 caches this model: `<cacheDir>/<repo, "/" → "_">`. */
+export const MODEL_DIR_NAME = "Qdrant_bge-small-en-v1.5-onnx-Q";
+
+/**
+ * The files that decide what a vector means, pinned. The download has no
+ * signature of its own, so this is the only thing between a tampered or
+ * truncated cache and an index built from it.
+ */
+export const MODEL_FILE_SHA256: Readonly<Record<string, string>> = {
+  "model_optimized.onnx": "51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431",
+  "tokenizer.json": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+};
+
+export class ModelIntegrityError extends Error {
+  override readonly name = "ModelIntegrityError";
+}
+
+async function sha256File(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+/** Refuse a model directory whose pinned files do not match. */
+export async function verifyModelFiles(modelDir: string): Promise<void> {
+  for (const [name, expected] of Object.entries(MODEL_FILE_SHA256)) {
+    const file = path.join(modelDir, name);
+    let actual: string;
+    try {
+      actual = await sha256File(file);
+    } catch (err) {
+      throw new ModelIntegrityError(`Embedding model file ${name} is unreadable: ${String(err)}`);
+    }
+    if (actual !== expected) {
+      throw new ModelIntegrityError(
+        `Embedding model file ${name} does not match its pinned SHA-256 ` +
+          `(expected ${expected}, got ${actual}). Delete ${modelDir} to re-download it.`,
+      );
+    }
+  }
+}
 
 /**
  * BGE v1.5 asks for an instruction on the QUERY side only; passages are
@@ -87,14 +133,93 @@ export interface EmbedderInitOptions {
  */
 export type InitEmbedding = (opts: EmbedderInitOptions) => Promise<FlagEmbedding>;
 
+/**
+ * Load the real model, then check it against the pinned hashes before it is
+ * used. Verified after init rather than before because fastembed's download is
+ * private to it; a mismatch still means nothing is ever embedded with it.
+ */
+export const initVerifiedModel: InitEmbedding = async (opts) => {
+  const model = await FlagEmbedding.init({ ...opts, showDownloadProgress: false });
+  await verifyModelFiles(path.join(opts.cacheDir, MODEL_DIR_NAME));
+  return model;
+};
+
+/** Model input tokens for a string, `[CLS]` and `[SEP]` included. */
+export type TokenCounter = (text: string) => Promise<number>;
+export type LoadTokenCounter = (cacheDir: string) => Promise<TokenCounter>;
+
+/** The model's own tokenizer, untruncated, from the verified model directory. */
+export const loadModelTokenCounter: LoadTokenCounter = async (cacheDir) => {
+  const tokenizer = Tokenizer.fromFile(path.join(cacheDir, MODEL_DIR_NAME, "tokenizer.json"));
+  return async (text) => (await tokenizer.encode(text, null)).getLength();
+};
+
+/** For stand-in models in tests: the chunker's estimate plus the special tokens. */
+export const estimatedTokenCounter: LoadTokenCounter = async () => async (text) =>
+  estimateTokens(text) + 2;
+
+/**
+ * The input actually embedded for a chunk, guaranteed to fit `maxTokens`
+ * whenever the chunk's own text does.
+ *
+ * Title, section path and overlap are prepended, and the model silently cuts
+ * whatever runs past its window — the END of the passage. Measured on a real
+ * library before this existed: 19% of chunks lost an average of 63 tokens of
+ * their own text that way, invisible to semantic search. So the context gives
+ * way to the text, cheapest first: overlap, then all but the deepest section,
+ * then the section path, then the title.
+ */
+export async function fitEmbedInput(
+  chunk: EmbeddableChunk,
+  count: TokenCounter,
+  maxTokens = MAX_TOKENS,
+): Promise<string> {
+  const candidates: EmbeddableChunk[] = [
+    chunk,
+    { ...chunk, overlapPrefix: chunk.overlapPrefix ? takeLastTokens(chunk.overlapPrefix, 16) : null },
+    { ...chunk, overlapPrefix: null },
+    { ...chunk, overlapPrefix: null, sectionPath: chunk.sectionPath.slice(-1) },
+    { ...chunk, overlapPrefix: null, sectionPath: [] },
+    { ...chunk, overlapPrefix: null, sectionPath: [], documentTitle: undefined },
+  ];
+  const tried = new Set<string>();
+  let input = "";
+  for (const candidate of candidates) {
+    input = composeEmbedInput(candidate);
+    if (tried.has(input)) continue;
+    tried.add(input);
+    if ((await count(input)) <= maxTokens) return input;
+  }
+  return input;
+}
+
 export class Embedder {
   private model: FlagEmbedding | null = null;
   private initPromise: Promise<FlagEmbedding> | null = null;
+  private counterPromise: Promise<TokenCounter> | null = null;
+  private readonly loadCounter: LoadTokenCounter;
 
   constructor(
     private readonly cacheDir: string,
-    private readonly init: InitEmbedding = (opts) => FlagEmbedding.init(opts),
-  ) {}
+    private readonly init: InitEmbedding = initVerifiedModel,
+    loadCounter?: LoadTokenCounter,
+  ) {
+    this.loadCounter =
+      loadCounter ?? (init === initVerifiedModel ? loadModelTokenCounter : estimatedTokenCounter);
+  }
+
+  /** Count model tokens the way the model will. Loads the model first. */
+  async countTokens(text: string): Promise<number> {
+    await this.ready();
+    if (!this.counterPromise) {
+      const attempt = this.loadCounter(this.cacheDir);
+      attempt.catch(() => {
+        if (this.counterPromise === attempt) this.counterPromise = null;
+      });
+      this.counterPromise = attempt;
+    }
+    return (await this.counterPromise)(text);
+  }
 
   /**
    * Initialise once, even under concurrent callers. The promise is cached
@@ -116,15 +241,9 @@ export class Embedder {
         return m;
       });
 
-      // A FAILED init must not be cached. The first run downloads ~130MB over
-      // the network, so it is the one call here that routinely fails for
-      // reasons that pass — offline, a flaky hop, a half-written cache. Caching
-      // the rejected promise made every later embed in the process rethrow that
-      // same first error until restart, long after the network came back.
-      //
-      // The identity check stops a stale failure from clearing a newer attempt,
-      // and this .catch is a separate handled branch, so no unhandled rejection
-      // is created while `initPromise` still rejects for real awaiters.
+      // A FAILED init is not cached: the first run downloads over the network,
+      // and a cached rejection would rethrow until restart. The identity check
+      // stops a stale failure clearing a newer attempt.
       attempt.catch(() => {
         if (this.initPromise === attempt) this.initPromise = null;
       });
@@ -142,7 +261,8 @@ export class Embedder {
   async embedPassages(chunks: readonly EmbeddableChunk[]): Promise<number[][]> {
     if (chunks.length === 0) return [];
     const model = await this.ready();
-    const inputs = chunks.map(composeEmbedInput);
+    const count = (text: string) => this.countTokens(text);
+    const inputs = await Promise.all(chunks.map((chunk) => fitEmbedInput(chunk, count)));
 
     const out: number[][] = [];
     for await (const batch of model.embed(inputs, BATCH_SIZE)) {

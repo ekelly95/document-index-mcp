@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../config.js";
+import { loadConfig, parseFlags } from "../config.js";
 import { createContext } from "../context.js";
 import { hybridSearch, DEFAULT_FUSION, type FusionTuning } from "../retrieval/hybrid.js";
 import { installProcessHandlers } from "../log.js";
@@ -51,12 +51,7 @@ interface Options {
 }
 
 function parseOptions(argv: readonly string[]): Options {
-  const flags = new Map<string, string>();
-  for (const arg of argv) {
-    if (!arg.startsWith("--")) continue;
-    const [key, value] = arg.slice(2).split("=", 2);
-    if (key) flags.set(key, value ?? "true");
-  }
+  const flags = parseFlags(argv);
 
   const rawK = flags.get("k");
   const k = rawK === undefined ? DEFAULT_K : Number(rawK);

@@ -9,30 +9,17 @@
  * they occur.
  */
 
-// v2: engine_used admits 'ts-ocr' (in-process tesseract.js OCR for scanned
-// PDFs). There is no migration scaffolding; an old database is refused by
-// `assertCompatible` with instructions to delete and re-ingest.
-// v3: the EPUB locator scheme is renamed 'chapter' -> 'part' (a spine file is
-// not necessarily a book chapter, and the old name overclaimed), and documents
-// gains ingest_warning for decks indexed with known-missing content. The
-// rename changes CHECK constraints, which SQLite cannot ALTER in place, so v2
-// is refused rather than upgraded — same pattern as v1.
-// v4: vec_chunks gains chunk_size=64. vec0 allocates storage a block at a time
-// and the table is partitioned per document, so at the default 1024 every
-// document cost 1.5MB of vector storage whether it held three chunks or a
-// thousand. Measured on a real 71-document library: 106MB of a 113MB index was
-// empty padding around 1.5MB of actual vectors. An existing index cannot adopt
-// a new chunk_size in place, so v3 is refused rather than upgraded.
+// No migrations: the index is derived data. A version bump is refused by
+// `assertCompatible`, and `pnpm reindex` rebuilds from the library, keeping
+// each document's title.
 //
-// NOT a version bump: the EPUB and PPTX readers were removed, so no row can
-// carry format 'epub'/'pptx' or locator scheme 'part'/'slide' again. The CHECK
-// constraints below still admit them, and are deliberately left alone. They are
-// now a superset of what is reachable, which is harmless — while tightening
-// them would change the schema text, and there is no ALTER for a CHECK, so
-// every existing index would be refused and re-ingested from scratch. Paying an
-// OCR re-run to narrow a constraint nothing can violate is not a trade worth
-// making. Tighten them the next time a real bump happens anyway.
-export const SCHEMA_VERSION = 4;
+// v2: engine_used admits 'ts-ocr'. v3: locator scheme 'chapter' -> 'part',
+// ingest_warning added. v4: vec_chunks chunk_size=64 (the default 1024 cost
+// every document 1.5MB of vector padding).
+// v5: kind admits 'references' (reference lists, excluded from search by
+// default), and the CHECKs drop the epub/pptx/html formats and part/slide
+// locators whose readers were removed.
+export const SCHEMA_VERSION = 5;
 
 export const SCHEMA_SQL = `
 -- ---------- meta ----------
@@ -50,12 +37,12 @@ CREATE TABLE IF NOT EXISTS documents (
   title           TEXT NOT NULL,
   source_path     TEXT NOT NULL,                    -- library-relative; display + re-ingest
   format          TEXT NOT NULL
-                    CHECK (format IN ('pdf','epub','docx','pptx','md','html','txt')),
+                    CHECK (format IN ('pdf','docx','md','txt')),
   sha256          TEXT NOT NULL UNIQUE,             -- idempotent re-ingest / dedupe
   engine_used     TEXT NOT NULL DEFAULT 'ts-fast'
                     CHECK (engine_used IN ('ts-fast','ts-ocr','docling','docling-ocr')),
   locator_scheme  TEXT NOT NULL
-                    CHECK (locator_scheme IN ('page','part','slide','section')),
+                    CHECK (locator_scheme IN ('page','section')),
   locator_count   INTEGER NOT NULL DEFAULT 0,       -- pages / sections
   chunk_count     INTEGER NOT NULL DEFAULT 0,       -- also serves as ingest progress
   embedding_model TEXT,                             -- e.g. 'fast-bge-small-en-v1.5'
@@ -82,9 +69,9 @@ CREATE TABLE IF NOT EXISTS document_chunks (
   document_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   seq             INTEGER NOT NULL,                 -- global reading order, 0-based
   kind            TEXT NOT NULL DEFAULT 'text'
-                    CHECK (kind IN ('text','table','code','list','heading')),
+                    CHECK (kind IN ('text','table','code','list','heading','references')),
   locator_type    TEXT NOT NULL
-                    CHECK (locator_type IN ('page','part','slide','section')),
+                    CHECK (locator_type IN ('page','section')),
   locator_value   TEXT NOT NULL,                    -- "41", "sec-2"
   locator_ordinal INTEGER NOT NULL,
   page_number     INTEGER,                          -- denormalized (pdf), else NULL

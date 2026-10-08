@@ -2,7 +2,7 @@ import * as z from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
 import { listProcessing } from "../db/documentsRepo.js";
-import { hybridSearch } from "../retrieval/hybrid.js";
+import { assessConfidence, hybridSearch } from "../retrieval/hybrid.js";
 import { CHUNK_KINDS, ChunkRefShape, describeLocation, toChunkRef } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 
@@ -44,11 +44,23 @@ const outputSchema = z.object({
         .string()
         .describe("Library-relative path of the source file; disambiguates documents sharing a title"),
       score: z.number().describe("Reciprocal-rank-fusion score; ordering only, not a relevance measure"),
+      similarity: z
+        .number()
+        .nullable()
+        .describe("Cosine similarity of query and passage; comparable across queries. Null in lexical mode"),
+      lexical_match: z.boolean().describe("Full-text search matched the query's words in this passage"),
       snippet: z
         .string()
         .describe("<=300 chars; query terms marked with « » when the match was lexical"),
     }),
   ),
+  confidence: z
+    .enum(["high", "low"])
+    .nullable()
+    .describe(
+      "'low' means even the best hit is a weak semantic match: the library probably does not " +
+        "cover this question, so do not treat the hits as an answer. Null in lexical mode.",
+    ),
   processing_documents: z
     .array(
       z.object({
@@ -70,7 +82,10 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         "Hybrid BM25 + semantic search across ingested documents. Returns ranked snippets " +
         "with precise locators (page or section, section path, bbox). This is the usual " +
         "starting point. It never returns full text — follow a hit with get_chunk_context " +
-        "using its chunk_id to read.",
+        "using its chunk_id to read. Check `confidence`: 'low' means the library probably " +
+        "does not cover the question. Reference lists are left out unless filter.kind is " +
+        "'references'.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },
@@ -123,8 +138,11 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
             document_title: h.row.document_title,
             source_path: h.row.source_path,
             score: h.score,
+            similarity: h.similarity === null ? null : Number(h.similarity.toFixed(3)),
+            lexical_match: h.lexicalMatch,
             snippet: h.snippet,
           })),
+          confidence: assessConfidence(hits),
           processing_documents: processing.map((d) => ({
             document_id: d.id,
             title: d.title,
@@ -156,12 +174,16 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
 
         const lines = payload.hits.map(
           (h, i) =>
-            `${i + 1}. ${h.document_title} — ${describeLocation(h)}\n   ${h.snippet}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
+            `${i + 1}. ${h.document_title} — ${describeLocation(h)}` +
+            (h.similarity === null ? "" : ` (similarity ${h.similarity.toFixed(2)})`) +
+            `\n   ${h.snippet}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
         );
-        return okStructured(
-          `${payload.hits.length} hit(s). Read one with get_chunk_context.\n\n${lines.join("\n\n")}${caveat}`,
-          payload,
-        );
+        const lead =
+          payload.confidence === "low"
+            ? `Low confidence: no passage is a strong match, so the library probably does not ` +
+              `cover "${args.query}". These are the nearest ${payload.hits.length}, not an answer.`
+            : `${payload.hits.length} hit(s). Read one with get_chunk_context.`;
+        return okStructured(`${lead}\n\n${lines.join("\n\n")}${caveat}`, payload);
       } catch (err) {
         return fail(`search_document failed: ${describeError(err)}`);
       }

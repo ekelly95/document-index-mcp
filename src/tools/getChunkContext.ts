@@ -40,6 +40,7 @@ export function registerGetChunkContext(server: McpServer, ctx: AppContext): voi
         "Address it by chunk_id (from search results) OR by document_id + seq (from " +
         "outline spans). This is the only tool that returns body text and it is hard-capped " +
         "at ~24k characters — walk seq windows to read progressively.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },

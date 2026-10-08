@@ -37,6 +37,7 @@ const outputSchema = z.object({
       z.object({
         document_id: z.string(),
         title: z.string(),
+        source_path: z.string().describe("Library-relative path; what ingest_document takes"),
         format: z.enum(FORMATS),
         ingest_status: z.enum(["pending", "processing", "ready", "failed"]),
         chunk_count: z.number().int(),
@@ -71,6 +72,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
         "straight to a section with document_id + chunk_seq_start. Never returns body text. " +
         "Call it with no document_id to list the library. It also reports ingest progress: " +
         "a document still being indexed shows status 'processing' with a rising chunk_count.",
+      annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
     },
@@ -82,6 +84,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
             documents: docs.map((d) => ({
               document_id: d.id,
               title: d.title,
+              source_path: d.source_path,
               format: d.format,
               ingest_status: d.ingest_status,
               chunk_count: d.chunk_count,
@@ -95,7 +98,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
               : docs
                   .map(
                     (d) =>
-                      `- ${d.title} [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
+                      `- ${d.title} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
                       (d.ingest_warning === null ? "" : " — warning: indexed incomplete"),
                   )
                   .join("\n");

@@ -75,8 +75,8 @@ function assertCompatible(db: Db, dbPath: string, expected: IndexExpectations): 
   if (version !== null && version !== String(SCHEMA_VERSION)) {
     throw new IncompatibleIndexError(
       `The index at ${dbPath} is schema version ${version}; this build expects ` +
-        `${SCHEMA_VERSION}. There is no migration path yet — delete that file ` +
-        `(along with its -wal and -shm siblings) and re-ingest the library.`,
+        `${SCHEMA_VERSION}. Rebuild it with \`pnpm reindex --library=<root>\`, which keeps ` +
+        `every document's title and moves the old file aside.`,
     );
   }
   setMeta(db, "schema_version", String(SCHEMA_VERSION));

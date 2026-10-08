@@ -10,7 +10,7 @@ import { createContext, type AppContext } from "../context.js";
 import { testEmbedder } from "../testing/stubEmbedder.js";
 import { buildServer } from "../server.js";
 import { indexCounts } from "../db/chunksRepo.js";
-import { deleteDocument } from "../db/documentsRepo.js";
+import { deleteDocument, INGEST_LEASE_MS, insertDocument } from "../db/documentsRepo.js";
 import { buildPdf, type PdfFixture } from "../testing/pdfFixture.js";
 
 /**
@@ -260,6 +260,24 @@ test("exposes exactly five tools", async () => {
       "search_document",
     ],
   );
+});
+
+test("the reading tools say they are read-only, and delete says it is destructive", async () => {
+  const { tools } = await client.listTools();
+  const hints = Object.fromEntries(tools.map((t) => [t.name, t.annotations ?? {}]));
+  for (const name of ["search_document", "get_document_outline", "get_chunk_context"]) {
+    assert.equal(hints[name]!.readOnlyHint, true, name);
+  }
+  assert.equal(hints["delete_document"]!.destructiveHint, true);
+  assert.equal(hints["ingest_document"]!.readOnlyHint, false);
+  for (const name of Object.keys(hints)) assert.equal(hints[name]!.openWorldHint, false, name);
+});
+
+test("the library listing names each document's path", async () => {
+  const res = await call("get_document_outline", {});
+  const payload = dataOf<{ documents: { source_path: string }[] }>(res);
+  assert.ok(payload.documents.length > 0);
+  assert.ok(payload.documents.every((d) => d.source_path.length > 0 && !path.isAbsolute(d.source_path)));
 });
 
 test("the startup probes for resources and prompts answer instead of erroring", async () => {
@@ -752,6 +770,36 @@ test("delete_document refuses an unknown id as a result, not a protocol failure"
   const res = await call("delete_document", { document_id: "01NOTATHING" });
   assert.equal((res as { isError?: boolean }).isError, true);
   assert.match(textOf(res), /Unknown document_id/);
+});
+
+test("delete_document refuses a live ingest but removes one whose writer is gone", async () => {
+  const insert = (id: string, sha: string) =>
+    insertDocument(ctx.db, {
+      id,
+      title: id,
+      sourcePath: `${id}.md`,
+      format: "md",
+      sha256: sha,
+      engineUsed: "ts-fast",
+      locatorScheme: "section",
+      locatorCount: 1,
+      embeddingModel: "fast-bge-small-en-v1.5",
+      ingestWarning: null,
+    });
+
+  insert("01LIVEINGEST", "a".repeat(64));
+  const live = await call("delete_document", { document_id: "01LIVEINGEST" });
+  assert.equal((live as { isError?: boolean }).isError, true);
+  assert.match(textOf(live), /still being indexed/);
+
+  insert("01DEADINGEST", "b".repeat(64));
+  ctx.db
+    .prepare("UPDATE documents SET updated_at = ? WHERE id = ?")
+    .run(new Date(Date.now() - INGEST_LEASE_MS - 1000).toISOString(), "01DEADINGEST");
+  const dead = await call("delete_document", { document_id: "01DEADINGEST" });
+  assert.notEqual((dead as { isError?: boolean }).isError, true, textOf(dead));
+
+  deleteDocument(ctx.db, "01LIVEINGEST");
 });
 
 test("the YouTube seam: a transcript is findable and its timestamps survive intact", async () => {
