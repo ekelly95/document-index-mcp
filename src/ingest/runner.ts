@@ -35,13 +35,8 @@ import { log, describeError } from "../log.js";
 const BATCH_SIZE = 64;
 
 /**
- * Indexing runs currently in flight, so shutdown can wait for them.
- *
- * Nothing tracked these, and the signal handler called `process.exit(0)`
- * immediately: Ctrl-C ninety percent of the way through a 900-page book threw
- * away all of it, because the next startup found a 'processing' row and
- * cleared it. Draining keeps what has already been committed and lets
- * finalisation happen if it is close.
+ * Indexing runs in flight, so shutdown can drain them instead of discarding
+ * committed work (Ctrl-C used to throw away 90% of a 900-page book).
  */
 const inFlight = new Set<Promise<void>>();
 
@@ -53,12 +48,9 @@ export class ShuttingDownError extends Error {
 }
 
 /**
- * Stop accepting ingests and wait for the ones already running.
- *
- * Returns how many were still unfinished when `timeoutMs` ran out. Those keep
- * their 'processing' row with its lease unrenewed, so the next startup's
- * recovery reclaims them; the alternative — waiting indefinitely on a
- * half-embedded 900-page book — is worse for a host that is trying to quit.
+ * Stop accepting ingests and wait for the running ones, up to `timeoutMs`.
+ * Returns how many were still unfinished; their unrenewed leases are reclaimed
+ * at the next start.
  */
 export async function drainIngests(timeoutMs = 10_000): Promise<number> {
   draining = true;
@@ -117,71 +109,30 @@ export interface IngestHandle {
 }
 
 /**
- * The document's identity, taken over the bytes that will actually be indexed.
- *
- * Previously this streamed the file in its own pass, before the sniff, the
- * probe, the metadata read and the parse each opened it again. The hash
- * therefore described a revision that nothing downstream necessarily saw: edit
- * the file during the seconds between, and the stored sha256 belonged to one
- * version while the chunks belonged to another. Hashing the one buffer every
- * later stage reads closes that by construction rather than by timing.
+ * The document's identity, hashed from the same buffer every later stage
+ * reads, so the sha256 can never describe a different revision than the chunks.
  */
 function sha256Of(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
 /**
- * Prepare an ingest and start it.
+ * Prepare an ingest and start it. Everything up to the `documents` row write is
+ * awaited, so the caller gets a real document_id; parse, chunk, embed and insert
+ * run behind the returned `done`. Progress is chunk_count against locator_count,
+ * which get_document_outline reports.
  *
- * Everything up to and including the `documents` row write is awaited, so the
- * caller always gets a real document_id and an honest locator count. The
- * indexing itself — parse, chunk, embed, insert — runs behind the returned
- * `done` promise.
+ * OWNERSHIP: `ingest_status = 'processing'` is the lock — if it is processing,
+ * it is not yours. The claim is one synchronous better-sqlite3 transaction
+ * (`claimForIngest`), so check-then-write cannot interleave. Doing it outside
+ * that transaction once let a second ingest of the same file delete a finished
+ * index (docs/gotchas.md).
  *
- * This is what replaces the source spec's async Tasks extension. Progress is
- * observable through documents.chunk_count against locator_count, which
- * get_document_outline already reports, so no protocol extension and no task
- * store is needed.
- *
- * ---
- *
- * OWNERSHIP, which is the whole reason this function has the shape it does.
- *
- * `ingest_status = 'processing'` IS the lock. A row in that state has exactly
- * one writer, and every other caller must leave it strictly alone. The claim
- * is made in `claimForIngest` below, inside a single better-sqlite3
- * transaction — and because better-sqlite3 is synchronous, that transaction
- * cannot interleave with anything at all: there is no await inside it for the
- * event loop to switch on. Check-then-write is therefore atomic by
- * construction, not by convention.
- *
- * An earlier version of this function did the check-then-write OUTSIDE the
- * lock and held the lock only around indexing, which let a second caller
- * observe a live ingest, call deleteChunksOf on it, re-index from seq 0, hit
- * UNIQUE(document_id, seq), throw, and have its own error handler delete the
- * first caller's finished index and mark the document failed. Two concurrent
- * ingests of one file could destroy a good index. The rule that fixes it is
- * the one stated above: if it is 'processing', it is not yours.
- *
- * ---
- *
- * SUPERSEDING, which is why the claim returns a list it does not act on.
- *
- * Re-ingesting an edited file produces a NEW document — the sha changed — so
- * the version it replaces has to go. It goes at finalisation, not here. The
- * claim commits in milliseconds; indexing then runs for up to a couple of
- * minutes, and anything in that stretch can fail: a malformed page, the
- * embedder falling over, a full disk, the host killing the process. Deleting
- * the predecessor up front meant every one of those failures left the library
- * with no copy of that path at all — and since the file on disk had already
- * been edited, the old text was gone for good.
- *
- * So `claimForIngest` only names the documents to evict, and
- * `finalizeDocument` evicts them inside the transaction that publishes the
- * replacement. In between, the path carries two rows: the old one 'ready' and
- * still answering searches, the new one 'processing' and invisible to them.
- * That interim state is legal by construction — `source_path` has no UNIQUE
- * constraint, and both search legs already filter to 'ready'.
+ * SUPERSEDING: an edited file is a new document (new sha). The version it
+ * replaces is evicted by `finalizeDocument` in the transaction that publishes the
+ * replacement, never at claim time, so a failed ingest leaves the old version
+ * searchable. Meanwhile the path legally holds two rows: old 'ready', new
+ * 'processing'.
  */
 export async function beginIngest(
   ctx: AppContext,
@@ -310,15 +261,8 @@ function indexInBackground(
               : ""),
         );
       } catch (err: unknown) {
-        // Inside the lock and inside the claim, so no retry can be running: the
-        // row is still 'processing' until failIngest flips it, and every call
-        // in there is synchronous.
-        //
-        // Logged as well as recorded. `documents.error_message` is only ever
-        // seen by a caller who polls get_document_outline for this exact id,
-        // and after a fire-and-forget ingest nothing prompts them to — so a
-        // failed background index could previously leave no trace anywhere a
-        // person would look.
+        // Inside the claim, so nothing else can be writing this row. Logged as well
+        // as recorded: after a fire-and-forget ingest nobody polls error_message.
         log.error(`indexing failed for ${src.absPath} [${documentId}]: ${describeError(err)}`);
         try {
           failIngest(ctx.db, documentId, describeError(err));
@@ -342,12 +286,8 @@ type Claim = Omit<IngestHandle, "done">;
 interface ClaimResult {
   claim: Claim;
   /**
-   * Documents currently occupying this source path that this ingest replaces.
-   *
-   * Deliberately NOT deleted here. They are handed to `finalizeDocument`, which
-   * evicts them in the same transaction that publishes the replacement, so a
-   * failure anywhere in between leaves the old version searchable. Empty for
-   * every outcome except "started" — the other two do no indexing.
+   * Documents at this source path that this ingest replaces. Evicted by
+   * `finalizeDocument`, not here, so a failure in between keeps the old version.
    */
   supersede: string[];
 }
@@ -386,28 +326,15 @@ function claimForIngest(
     const existing = findBySha256(ctx.db, sha256);
 
     if (existing?.ingest_status === "processing" && ingestLeaseIsLive(existing)) {
-      // Somebody else owns this. Touch nothing — not the chunks, not the row,
-      // and not the path either: whoever claimed it will do the superseding at
-      // its own finalisation, on this caller's behalf.
-      //
-      // The lease check is what stops that courtesy becoming a deadlock. A row
-      // abandoned by a crash is still 'processing', and without the check every
-      // future ingest of that file would politely join an ingest that is never
-      // going to progress. An expired lease means nobody is home, so this call
-      // falls through and takes the document over below.
+      // Somebody else owns this; touch nothing. The lease check is what stops a row
+      // abandoned by a crash from making every future ingest of the file join an
+      // ingest that will never progress.
       return { claim: claimOf(existing, "joined"), supersede: [] };
     }
 
-    // Editing a file changes its sha256, so the old version survives as a
-    // second document at the same path and would keep answering searches with
-    // text that is no longer in the file. One library path holds one document;
-    // the previous occupant goes.
-    //
-    // Checked BEFORE the reuse branch, not after. A file whose contents are
-    // replaced by those of another already-indexed file takes the reuse path —
-    // the sha is known — and would otherwise move that document onto this path
-    // without evicting what was already there, leaving two documents claiming
-    // one path: the exact state this exists to prevent.
+    // One library path holds one document: an edited file's previous version
+    // goes. Checked before the reuse branch, which could otherwise move an
+    // already-indexed document onto this path without evicting its occupant.
     const stale = findStaleAtPath(ctx.db, sourcePath, sha256);
     for (const s of stale) {
       // Scanned first, so the throw below cannot leave a half-applied eviction
@@ -425,19 +352,10 @@ function claimForIngest(
     const staleIds = stale.map((s) => s.id);
 
     if (existing?.ingest_status === "ready") {
-      // Identical bytes are the same document wherever they live: sha256 is
-      // the identity. A renamed or copied file only needs its location
-      // recorded, and `sha256 UNIQUE` would refuse a second copy regardless.
-      //
-      // Evicted eagerly on THIS path, unlike the "started" path below: there
-      // is nothing to parse and nothing to embed, so there is no later failure
-      // for the old version to survive — and deferring would leave two 'ready'
-      // documents at one path with nothing scheduled to resolve it.
-      //
-      // deleteDocument, not a raw DELETE: the FK cascade takes document_chunks
-      // and its AFTER DELETE trigger clears FTS, but vec_chunks is a vec0
-      // virtual table that no cascade reaches, and orphaned vectors still
-      // answer KNN queries.
+      // Identical bytes are the same document wherever they live; a renamed or
+      // copied file only needs its path updated. Evicted eagerly here because nothing
+      // is indexed, so there is no later failure to survive. deleteDocument, not a
+      // raw DELETE: no cascade reaches the vec0 table.
       for (const id of staleIds) deleteDocument(ctx.db, id);
       if (existing.source_path !== sourcePath) {
         setSourcePath(ctx.db, existing.id, sourcePath);
@@ -564,16 +482,9 @@ async function indexDocument(
     clearInterval(lease);
   }
 
-  // A document that produced nothing must not be published as though it were
-  // complete. PDF already refuses emptiness out loud — a scan with no text
-  // layer under --ocr=off — but Markdown and text had no such gate, so a
-  // one-byte file
-  // became a 'ready' document with zero chunks. Searching it then returns
-  // nothing, which is indistinguishable from a topic the library does not
-  // cover: exactly the confusion the PDF probe exists to prevent.
-  //
-  // Thrown rather than finalised, so the caller's error path marks it 'failed'
-  // with this message attached and get_document_outline can say why.
+  // A document that produced nothing must not be published as complete: a
+  // search finding nothing would be indistinguishable from an uncovered topic.
+  // Thrown, so the error path marks it 'failed' with this message.
   if (seq === 0) {
     throw new UnsupportedFormatError(
       "The file produced no indexable content — it is empty, or holds only material this parser does not read.",

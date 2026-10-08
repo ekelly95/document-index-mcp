@@ -15,12 +15,8 @@ import type { DocumentMetadata, DocumentSource } from "../ir.js";
 const require = createRequire(import.meta.url);
 
 /**
- * Where pdfjs finds its bundled Type1 fonts. Without them text metrics degrade
- * and every load logs a warning.
- *
- * It must be a file:// URL with a literal trailing "/" — pdfjs validates for
- * that character specifically, so a Windows path ending in a backslash is
- * rejected outright.
+ * Where pdfjs finds its bundled Type1 fonts. Must be a file:// URL ending in a
+ * literal "/": pdfjs rejects a Windows path ending in a backslash.
  */
 function standardFontDataUrl(): string {
   const pkg = require.resolve("pdfjs-dist/package.json");
@@ -33,17 +29,8 @@ export interface LoadedPdf {
 }
 
 /**
- * The pdfjs document for a source, built at most once.
- *
- * The probe, the metadata pass and the parse each need a PDFDocumentProxy, and
- * each used to build its own from its own fresh read of the file — three full
- * reads and three full parses per ingest, plus a re-import of pdfjs and a
- * re-resolution of the standard font directory every time. Memoising on the
- * source collapses that to one without any of the three having to know the
- * others exist.
- *
- * Disposal is registered with the memo, so `DocumentSource.close()` tears the
- * document down when the ingest ends, whether it succeeded or threw.
+ * The pdfjs document for a source, built once and shared by the probe, the
+ * metadata pass and the parse; disposed when the source closes.
  */
 export function loadPdf(src: DocumentSource): Promise<LoadedPdf> {
   return src.derive(
@@ -57,15 +44,8 @@ async function openPdf(src: DocumentSource): Promise<LoadedPdf> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
 
   const task = pdfjs.getDocument({
-    // A COPY, and it has to be. pdfjs takes ownership of whatever is passed
-    // here and detaches the underlying ArrayBuffer, so handing it the source's
-    // own bytes leaves every later reader of `src.bytes` holding a detached
-    // view — "Cannot perform Construct on a detached ArrayBuffer" from
-    // something as innocent as re-sniffing the format afterwards.
-    //
-    // The copy is not new cost: the previous implementation copied too
-    // (`new Uint8Array(await fs.readFile(...))`), three times per ingest
-    // instead of once.
+    // A copy: pdfjs takes ownership of the buffer and detaches it, which would
+    // break every later reader of `src.bytes`.
     data: new Uint8Array(src.bytes),
     standardFontDataUrl: standardFontDataUrl(),
     // No worker fetch and no system font probing: this is a local batch
@@ -91,26 +71,12 @@ async function openPdf(src: DocumentSource): Promise<LoadedPdf> {
 }
 
 /**
- * Placeholder titles that authoring tools write into every file they produce.
- *
- * These are worse than no title at all, because the filename fallback would
- * have said something true. Measured on real documents: the 9/11 Commission
- * Report ships with `201-635.job` — the print shop's job name — and an
- * untouched deck ships with `PowerPoint Presentation`.
- *
- * The rule used to be one alternation of English strings, and a corpus of
- * downloaded decks showed why that is not enough: PowerPoint localises its
- * placeholder, so a Spanish deck ships `Presentación de PowerPoint` and a
- * Portuguese one `Apresentação do PowerPoint`. Two of six sample decks indexed
- * under a title that means "a PowerPoint file" in a language the pattern did
- * not cover.
- *
- * Enumerating every language's phrasing would also have to enumerate its word
- * ORDER — English puts the product first, Spanish last, German hyphenates.
- * So instead of matching the whole phrase, the parts are stripped and the
- * question becomes whether anything meaningful is left. "PowerPoint for
- * Beginners" keeps "forBeginners" and survives; "Presentación de PowerPoint"
- * reduces to nothing and does not.
+ * Placeholder titles authoring tools write into every file, which are worse
+ * than the filename ("PowerPoint Presentation", a print shop's "201-635.job").
+ * Rather than enumerate every language's phrasing, product names, generic words
+ * and connectives are stripped and the title is kept only if something is left:
+ * "Presentación de PowerPoint" reduces to nothing, "PowerPoint for Beginners"
+ * keeps "forBeginners".
  */
 const TITLE_PRODUCT = /\b(?:microsoft\s+)?(?:powerpoint|word|excel|impress|keynote)\b/gi;
 const TITLE_GENERIC =
@@ -160,13 +126,8 @@ export async function pdfMetadata(src: DocumentSource): Promise<DocumentMetadata
 }
 
 /**
- * Roman numerals, properly — not "any word spelled from i/v/x/l/c/d/m".
- *
- * The earlier pattern was `[ivxlcdm]+` under `/i`, which deleted any line
- * consisting of one such word: `civil`, `mild`, `mill`, `did`, `DVD`, `LCD`.
- * That is silent content loss, not a formatting nit — a paragraph reading only
- * "I" vanished from the index. This requires the real grammar and a single
- * case, since printed page numbers are never mixed-case.
+ * Roman numerals by their real grammar and in one case: the old `[ivxlcdm]+`
+ * deleted lines like "civil", "mild" and "did" as page numbers.
  */
 const ROMAN = "m{0,4}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})";
 const PAGE_NUMBER_LINE = new RegExp(
@@ -269,31 +230,12 @@ interface Extent {
 /**
  * Assemble pdfjs text items into lines, in reading order.
  *
- * Items are grouped by baseline rather than by the `hasEOL` flag: pdfjs emits
- * zero-width items purely as line-break markers, and real documents interleave
- * runs (a bold word mid-sentence) that share a baseline but arrive as separate
- * items. Baseline proximity is the signal that survives both.
- *
- * COLUMNS, which is why this is more than a sort.
- *
- * Grouping by baseline alone is right for one column and wrong for two. On a
- * two-column paper the first line of the left column and the first line of the
- * right column share a baseline, so they merged into a single row and were then
- * concatenated left to right, interleaving the columns line by line down the
- * whole page. Everything downstream inherited the scrambled text with no signal
- * that anything had happened — and because locators stayed page-true, the
- * citation pointed confidently at the right page of nonsense. Two-column papers
- * are most of what a scholarly library holds.
- *
- * So the page is split into bands: at full-width rows (titles, abstracts,
- * spanning figures), because whatever columns exist above one are not the
- * columns below it, and at large vertical gaps, which is also what keeps a
- * centred page number out of the gutter it would otherwise hide. Within a band
- * a gutter is a vertical strip no text run crosses, found from individual runs
- * rather than row extents — precisely because a row that already merged both
- * columns spans the gutter, and only the gap BETWEEN its runs reveals it.
- * Bands with a gutter are emitted column by column; bands without one behave
- * exactly as before.
+ * Items are grouped by baseline rather than `hasEOL`, which pdfjs uses
+ * inconsistently. On a two-column page the columns share baselines, so the page
+ * is split into bands (at full-width rows and large vertical gaps) and each band
+ * is searched for a gutter: a vertical strip no individual run crosses. Bands
+ * with a gutter are emitted column by column; without this, two-column papers
+ * read line-interleaved while still citing the right page.
  */
 export function assembleLines(
   items: readonly TextItemLike[],
@@ -307,21 +249,10 @@ export function assembleLines(
 }
 
 /**
- * Is this run set on a horizontal baseline?
- *
- * The text matrix is `[a b c d e f]`, where `a` carries `fontSize·cos θ` and
- * `b` carries `fontSize·sin θ`, so `|b| > |a|` means the run is turned more
- * than 45° off horizontal.
- *
- * Sideways runs are margin furniture — arXiv's submission stamp is the case
- * that forced this — and letting one into the line stream does two kinds of
- * damage. Its size is read from `transform[0]`, which is ≈0 when rotated, so
- * the `|| item.height` fallback hands back the glyph box's WIDTH instead:
- * measured at 20pt on a paper whose real title is 14.5pt, which made the stamp
- * the largest "heading" in the document and re-based the whole section trail
- * under it. And `x1 = x0 + width` treats its 300pt vertical extent as
- * horizontal, inflating the page's text extent and erasing the gutter that
- * two-column detection depends on.
+ * Is this run set on a horizontal baseline (`|b| <= |a|` in its text matrix)?
+ * Sideways margin text such as arXiv's stamp is furniture: its size reads as its
+ * width, making it the largest "heading", and its height is taken as width,
+ * erasing the gutter column detection needs.
  */
 function isUpright(item: RealTextItem): boolean {
   return Math.abs(item.transform[1] ?? 0) <= Math.abs(item.transform[0] ?? 0);
@@ -421,12 +352,9 @@ function largestInternalGap(row: Row): number {
 }
 
 /**
- * Break the page where a column layout cannot continue across.
- *
- * A row spanning most of the text extent is a title, an abstract or a wide
- * figure, and the columns above it are not the columns below it. A large
- * vertical gap does the same job for a running footer, which would otherwise
- * land in the gutter and hide it.
+ * Break the page where a column layout cannot continue across: at a row that
+ * spans the page without a gap (a title, abstract or wide figure) and at a
+ * large vertical gap, which keeps a footer out of the gutter.
  */
 function splitIntoBands(rows: readonly Row[], extent: Extent): Row[][] {
   const width = extent.max - extent.min;

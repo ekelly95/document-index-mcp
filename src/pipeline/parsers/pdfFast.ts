@@ -16,13 +16,9 @@ import {
 import { analyseStructure, isCitationMarkerLine, type StructureAnalysis } from "./pdfStructure.js";
 
 /**
- * PDF with a usable text layer -> IR.
- *
- * pdfjs-dist rather than the spec's MuPDF.js: mupdf is AGPL-3.0-or-later,
- * which would be viral over this entire server. pdfjs-dist is Apache-2.0 and
- * supplies everything the design needs — per-item text matrices for bbox and
- * font size, getPageLabels() for printed page numbers, getOutline() for
- * embedded bookmarks.
+ * PDF with a usable text layer -> IR, via pdfjs-dist (Apache-2.0; MuPDF.js is
+ * AGPL). Text matrices give bbox and size, getPageLabels() printed numbers,
+ * getOutline() bookmarks.
  */
 
 /** Vertical gap, as a multiple of font size, that ends a paragraph. */
@@ -59,16 +55,10 @@ const normalise = (s: string) =>
     .trim();
 
 /**
- * Does this heading name the section the trail already sits in?
- *
- * A bookmarked section title is usually also printed as a visible heading on
- * its opening page, and extending the trail with it again nests the section
- * inside itself. Equality is not enough: a heading printed across two lines
- * arrives as its own TAIL once the first line has been consumed elsewhere, so
- * `AND TABLES` has to be recognised as part of `List of Illustrations and
- * Tables`. Suffix, not substring — a tail is always a suffix, whereas
- * substring would fold `Introduction` and `Introduction to Statistics`
- * together, and those are two different sections.
+ * Does this heading name the section the trail already sits in? A bookmarked
+ * section is usually also printed on its page; a heading wrapped over two lines
+ * can arrive as its tail ("AND TABLES"), so a word-boundary suffix counts too.
+ * Suffix, not substring: "Introduction" and "Introduction to Statistics" differ.
  */
 function namesSameSection(heading: string, current: string): boolean {
   const a = normalise(heading);
@@ -90,25 +80,12 @@ export class PdfFastParser implements DocumentParser {
     const trailByPage = await bookmarkTrails(loaded);
     const analysis = await analysePages(loaded);
 
-    // Bookmarks and font-size tiers are combined rather than chosen between.
-    //
-    // Bookmarks are authoritative but coarse — they resolve to a page, so
-    // they cannot see a subsection that starts halfway down one. Font-size
-    // tiers are finer but noisier. So a bookmark RE-BASES the trail when its
-    // section begins, and detected headings extend it from there. Front
-    // matter, which usually sits before the first bookmark, still gets a
-    // section path from its headings.
-    //
-    // The trail is a STACK ordered by the font size that opened each section,
-    // not an array indexed by heading level. Level came from the tier index,
-    // and `trail.slice(0, level - 1)` cannot pad — so a heading whose level
-    // exceeded the current depth appended instead of replacing, and equal-sized
-    // sections nested inside one another in a staircase. Measured on a paper
-    // whose seven numbered sections are all one size: `1 Introduction` >
-    // `2 Background` > `3 Model Architecture` > `4 Why Self-Attention`, each a
-    // child of the last, when all seven are peers. Popping every entry opened
-    // at a size no larger than this one makes equal sizes siblings by
-    // construction and makes a bigger heading close everything smaller.
+    // Bookmarks re-base the trail where their section starts; detected headings
+    // extend it, so a subsection halfway down a page, and front matter before the
+    // first bookmark, still get a path. The trail is a stack ordered by the size
+    // that opened each section: equal sizes are siblings and a larger heading
+    // closes everything smaller (an index-by-level trail nested equal sections in
+    // a staircase).
     let stack: TrailEntry[] = [];
     let trail: string[] = [];
     let currentBookmarkKey = "";
@@ -191,21 +168,10 @@ export class PdfFastParser implements DocumentParser {
           const pending = flushParagraph();
           if (pending) yield pending;
 
-          // A heading set too wide for its measure wraps, and each line
-          // arrives separately. Left alone they become separate headings of
-          // equal size that nest into one another: a report cover reading
-          // "THE 9/11" / "COMMISSION" / "REPORT" produced three roots, and a
-          // journal title split across two lines put its SECOND half at the
-          // top of the outline.
-          //
-          // Same size, close together and running down the page is necessary
-          // but NOT sufficient — a section heading immediately above its first
-          // subheading looks identical by those tests, and merging those two
-          // destroys a real level of hierarchy. What separates them is shape.
-          // A line only wraps because it ran out of measure, so a wrapped
-          // heading is either justified (its first line reaches the right edge
-          // the page's text uses) or centred (its lines share an axis). Two
-          // sibling headings are left-aligned and short.
+          // A heading too wide for its measure wraps into several lines of the same
+          // style. They are one heading only if the first ran to the text's right edge
+          // (justified) or they share a centre; two short left-aligned headings in a row
+          // are a section and its first subsection.
           const group = [line];
           while (i + 1 < lines.length && group.length < HEADING_WRAP_MAX_LINES) {
             const previous = group[group.length - 1]!;
@@ -293,12 +259,8 @@ export class PdfFastParser implements DocumentParser {
 }
 
 /**
- * Rejoin lines the PDF broke for layout.
- *
- * A hyphen at end of line is a soft break introduced by justification, so the
- * word is reassembled; otherwise a space is the right join. Shared with the
- * OCR parser, whose recognised lines wrap for exactly the same reason, so it
- * asks only for `.text`.
+ * Rejoin lines broken for layout, healing end-of-line hyphenation. Shared with
+ * the OCR parser.
  */
 export function joinWrapped(lines: readonly { text: string }[]): string {
   let out = "";
@@ -338,12 +300,8 @@ async function analysePages({ doc }: LoadedPdf): Promise<StructureAnalysis> {
 }
 
 /**
- * Resolve embedded bookmarks to a section trail per page index.
- *
- * Destinations are indirect references, so each has to be resolved through
- * getPageIndex. Entries that fail to resolve are skipped rather than fatal —
- * broken destinations are common in real files and are not worth refusing a
- * whole book over.
+ * Embedded bookmarks as a section trail per page index. Unresolvable
+ * destinations are skipped rather than failing the document.
  */
 export async function bookmarkTrails({ doc }: LoadedPdf): Promise<Map<number, string[]>> {
   const outline = await doc.getOutline().catch(() => null);
