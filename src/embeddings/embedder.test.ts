@@ -8,7 +8,6 @@ import {
   composeEmbedInput,
   Embedder,
   fitEmbedInput,
-  loadModelTokenCounter,
   MODEL_FILE_SHA256,
   ModelIntegrityError,
   verifyModelFiles,
@@ -156,7 +155,9 @@ test("context gives way so the chunk's own text always reaches the model", async
 test("with the real tokenizer, fitted chunks never exceed the model window", {
   skip: process.env["DOCUMENT_INDEX_TEST_REAL_MODEL"] !== "1" || !process.env["DOCUMENT_INDEX_MODEL_CACHE"],
 }, async () => {
-  const count = await loadModelTokenCounter(process.env["DOCUMENT_INDEX_MODEL_CACHE"]!);
+  // Through the Embedder, which downloads and verifies the model on a cold cache.
+  const embedder = new Embedder(process.env["DOCUMENT_INDEX_MODEL_CACHE"]!);
+  const count = (text: string) => embedder.countTokens(text);
   // Numeric tables are where chars/4 under-counts worst.
   const table = [
     "| Nutrient | RDA | UL | % DV |",
