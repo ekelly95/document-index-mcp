@@ -195,6 +195,8 @@ export interface PdfLine {
   yTop: number;
   /** Font size in points, from the text matrix scale. */
   size: number;
+  /** pdfjs font id of the line's largest run; a heading style is a size AND a face. */
+  font: string;
 }
 
 /**
@@ -207,10 +209,17 @@ interface TextItemLike {
   transform?: number[];
   width?: number;
   height?: number;
+  fontName?: string;
   /** Present only on marked-content markers; keeps the union assignable. */
   type?: string;
 }
-type RealTextItem = { str: string; transform: number[]; width: number; height: number };
+type RealTextItem = {
+  str: string;
+  transform: number[];
+  width: number;
+  height: number;
+  fontName?: string;
+};
 
 function isTextItem(item: TextItemLike): item is RealTextItem {
   return (
@@ -236,6 +245,7 @@ const OCCUPANCY_BUCKETS = 240;
 
 interface Part {
   str: string;
+  font: string;
   x0: number;
   x1: number;
   size: number;
@@ -246,6 +256,8 @@ interface Row {
   yBaseline: number;
   yTop: number;
   size: number;
+  /** x positions of whitespace-only items, which are explicit word breaks. */
+  spaces: number[];
 }
 
 /** A horizontal span in PDF user space. */
@@ -317,17 +329,15 @@ function isUpright(item: RealTextItem): boolean {
 
 /** Runs sharing a baseline, grouped into rows and ordered down the page. */
 function groupByBaseline(items: readonly TextItemLike[], tolerance: number): Row[] {
-  const real = items.filter(
-    (i): i is RealTextItem =>
-      isTextItem(i) && i.str.trim().length > 0 && isUpright(i),
-  );
+  const upright = items.filter((i): i is RealTextItem => isTextItem(i) && isUpright(i));
 
   const rows: Row[] = [];
-  for (const item of real) {
+  for (const item of upright) {
+    if (item.str.trim().length === 0) continue;
     const size = Math.abs(item.transform[0] ?? item.height) || item.height;
     const x0 = item.transform[4] ?? 0;
     const y = item.transform[5] ?? 0;
-    const part: Part = { str: item.str, x0, x1: x0 + item.width, size };
+    const part: Part = { str: item.str, font: item.fontName ?? "", x0, x1: x0 + item.width, size };
 
     const row = rows.find((r) => Math.abs(r.yBaseline - y) <= tolerance);
     if (row) {
@@ -335,13 +345,49 @@ function groupByBaseline(items: readonly TextItemLike[], tolerance: number): Row
       row.size = Math.max(row.size, size);
       row.yTop = Math.max(row.yTop, y + size);
     } else {
-      rows.push({ parts: [part], yBaseline: y, yTop: y + size, size });
+      rows.push({ parts: [part], yBaseline: y, yTop: y + size, size, spaces: [] });
     }
   }
 
+  // A whitespace-only item is the PDF saying "word break here". Dropping it and
+  // inferring spaces from geometry alone lost them wherever the space glyph is
+  // narrow: "Adequate Intakes for" + " " + "Chromium" became "forChromium".
+  for (const item of upright) {
+    if (item.str.length === 0 || item.str.trim().length > 0) continue;
+    const y = item.transform[5] ?? 0;
+    rows.find((r) => Math.abs(r.yBaseline - y) <= tolerance)?.spaces.push(item.transform[4] ?? 0);
+  }
+
   // Down the page. Order WITHIN a row is decided per band, below.
-  rows.sort((a, b) => b.yBaseline - a.yBaseline);
-  return rows;
+  return rows.flatMap(splitMixedRow).sort((a, b) => b.yBaseline - a.yBaseline);
+}
+
+/**
+ * Split a row where runs of clearly different sizes sit far apart.
+ *
+ * A sidebar's body line and a heading in the next column can share a
+ * baseline; merged, the row took the heading's size and the whole thing — "body
+ * caused by free radicals. Vitamins" — became a heading. Adjacent runs of
+ * different sizes (a large word inside a title) stay together.
+ */
+function splitMixedRow(row: Row): Row[] {
+  const ordered = [...row.parts].sort((a, b) => a.x0 - b.x0);
+  const segments: Part[][] = [];
+  for (const part of ordered) {
+    const current = segments.at(-1);
+    const previous = current?.at(-1);
+    const apart =
+      previous !== undefined &&
+      part.x0 - previous.x1 > 1.5 * Math.max(part.size, previous.size) &&
+      Math.max(part.size, previous.size) / Math.min(part.size, previous.size) > 1.15;
+    if (!current || apart) segments.push([part]);
+    else current.push(part);
+  }
+  if (segments.length === 1) return [row];
+  return segments.map((parts) => {
+    const size = Math.max(...parts.map((p) => p.size));
+    return { parts, yBaseline: row.yBaseline, yTop: row.yBaseline + size, size, spaces: row.spaces };
+  });
 }
 
 /** The horizontal span of everything on the page. */
@@ -508,16 +554,23 @@ function lineFrom(parts: readonly Part[], row: Row): PdfLine {
   let text = "";
   let previousX1: number | null = null;
   for (const part of ordered) {
-    // Re-insert the space that a positioning operator implied rather than wrote.
-    if (previousX1 !== null && part.x0 - previousX1 > size * 0.2 && !text.endsWith(" ")) {
+    // A space the PDF wrote as its own item, or one a positioning operator
+    // implied by leaving a gap.
+    const explicit =
+      previousX1 !== null &&
+      row.spaces.some((x) => x >= previousX1! - 1 && x <= part.x0 + 1);
+    const implied = previousX1 !== null && part.x0 - previousX1 > size * 0.2;
+    if ((explicit || implied) && text.length > 0 && !text.endsWith(" ")) {
       text += " ";
     }
     text += part.str;
     previousX1 = part.x1;
   }
 
+  const largest = ordered.reduce((a, b) => (b.size > a.size ? b : a));
   return {
     text: text.replace(/\s+/g, " ").trim(),
+    font: largest.font,
     x0: Math.min(...ordered.map((p) => p.x0)),
     x1: Math.max(...ordered.map((p) => p.x1)),
     yBaseline: row.yBaseline,

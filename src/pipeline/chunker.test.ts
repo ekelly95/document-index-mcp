@@ -278,3 +278,40 @@ test("fitToBudget passes chunks that fit through untouched", async () => {
   for await (const c of fitToBudget(one(), async (t) => estimateTokens(t))) out.push(c);
   assert.deepEqual(out, [draft]);
 });
+
+test("a fragment folds into its neighbour on the same page, never across pages or into a table", async () => {
+  const block = (kind: BlockKind, text: string, page: number): DocBlock => ({
+    kind,
+    text,
+    locator: { type: "page", value: String(page), ordinal: page - 1 },
+    sectionPath: ["Vitamins"],
+    bbox: null,
+  });
+  const prose = "Vitamin C supports collagen synthesis and immune function in athletes. ".repeat(6);
+  const out: DraftChunk[] = [];
+  for await (const c of chunkBlocks(
+    (async function* () {
+      yield block("paragraph", prose, 1);
+      yield block("table", "| a | b |\n| --- | --- |\n| 1 | 2 |", 1);
+      yield block("paragraph", "Stage 2", 1); // label beside a table
+      yield block("paragraph", "Iron deficiency", 2); // alone on its page
+      yield block("paragraph", prose, 3);
+      yield block("paragraph", "(figure label)", 3);
+    })(),
+    { scheme: "page" },
+  )) {
+    out.push(c);
+  }
+
+  assert.deepEqual(
+    out.map((c) => [c.locator.value, c.kind, c.text.length > 60 ? "prose" : c.text]),
+    [
+      ["1", "text", "prose"],
+      ["1", "table", "| a | b |\n| --- | --- |\n| 1 | 2 |"],
+      ["1", "text", "Stage 2"],
+      ["2", "text", "Iron deficiency"],
+      ["3", "text", "prose"],
+    ],
+  );
+  assert.ok(out[4]!.text.endsWith("(figure label)"));
+});

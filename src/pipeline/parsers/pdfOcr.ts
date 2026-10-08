@@ -16,6 +16,7 @@ import {
 } from "./pdfCommon.js";
 import { bookmarkTrails, joinWrapped } from "./pdfFast.js";
 import { usableTextLayer } from "./pdfProbe.js";
+import { isCitationMarkerLine } from "./pdfStructure.js";
 import {
   acquireOcrScheduler,
   holdOcrPool,
@@ -135,7 +136,8 @@ export class PdfOcrParser implements DocumentParser {
 
     const content = await page.getTextContent();
     const lines = assembleLines(content.items).filter(
-      (line) => line.text.length > 0 && !isPageNumberLine(line.text),
+      (line) =>
+        line.text.length > 0 && !isPageNumberLine(line.text) && !isCitationMarkerLine(line.text),
     );
     const layerText = lines.map((l) => l.text).join(" ").trim();
 
@@ -222,7 +224,7 @@ async function ocrBlocks(
         .filter((line) => line.text.length > 0 && line.confidence >= OCR_MIN_LINE_CONFIDENCE);
       if (kept.length === 0) continue;
       const text = joinWrapped(kept);
-      if (text.trim().length === 0 || isPageNumberLine(text)) continue;
+      if (text.trim().length === 0 || isPageNumberLine(text) || isCitationMarkerLine(text)) continue;
       blocks.push({
         kind: "paragraph",
         text,

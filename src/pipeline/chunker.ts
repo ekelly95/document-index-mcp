@@ -132,10 +132,8 @@ function sectionPathFor(blocks: DocBlock[]): string[] {
 }
 
 /** The union rectangle of every contributing block that carried one. */
-function unionBBox(blocks: DocBlock[]): BBox | null {
-  const boxes = blocks
-    .map((b) => b.bbox)
-    .filter((b): b is BBox => Array.isArray(b) && b.length === 4);
+function unionBBox(candidates: readonly (BBox | null | undefined)[]): BBox | null {
+  const boxes = candidates.filter((b): b is BBox => Array.isArray(b) && b.length === 4);
   if (boxes.length === 0) return null;
 
   let x0 = Infinity;
@@ -151,7 +149,66 @@ function unionBBox(blocks: DocBlock[]): BBox | null {
   return [x0, y0, x1 - x0, y1 - y0];
 }
 
+/**
+ * Below this many estimated tokens a chunk is a fragment — a figure label, a
+ * stray caption line, a lone citation — and is folded into a neighbour on the
+ * same locator. As a chunk of its own it is a semantic "hub": its embedding is
+ * close to everything, so it tops searches the library cannot answer.
+ */
+export const MIN_CHUNK_TOKENS = 24;
+
+/** Kinds that keep a chunk of their own, so `filter.kind` stays meaningful. */
+const ISOLATED_KINDS: ReadonlySet<ChunkKind> = new Set(["table", "code"]);
+
 export async function* chunkBlocks(
+  blocks: AsyncIterable<DocBlock>,
+  opts: ChunkerOptions,
+): AsyncIterable<DraftChunk> {
+  yield* mergeFragments(packBlocks(blocks, opts), opts.maxTokens ?? MAX_TOKENS);
+}
+
+/**
+ * Fold fragments into the neighbouring chunk, never across a locator (the
+ * boundary law) and never into or out of a table or code chunk.
+ */
+async function* mergeFragments(
+  chunks: AsyncIterable<DraftChunk>,
+  max: number,
+): AsyncIterable<DraftChunk> {
+  let pending: DraftChunk | null = null;
+  for await (const chunk of chunks) {
+    if (pending && canMerge(pending, chunk, max)) {
+      pending = merge(pending, chunk);
+      continue;
+    }
+    if (pending) yield pending;
+    pending = chunk;
+  }
+  if (pending) yield pending;
+}
+
+function canMerge(a: DraftChunk, b: DraftChunk, max: number): boolean {
+  if (a.locator.value !== b.locator.value) return false;
+  if (ISOLATED_KINDS.has(a.kind) || ISOLATED_KINDS.has(b.kind)) return false;
+  if (a.tokenCount >= MIN_CHUNK_TOKENS && b.tokenCount >= MIN_CHUNK_TOKENS) return false;
+  return a.tokenCount + b.tokenCount <= max;
+}
+
+function merge(a: DraftChunk, b: DraftChunk): DraftChunk {
+  const text = `${a.text}\n\n${b.text}`;
+  return {
+    // A heading-only fragment joins the body it introduces and takes its path.
+    kind: a.kind === b.kind ? a.kind : a.kind === "heading" ? b.kind : "text",
+    locator: a.locator,
+    sectionPath: a.kind === "heading" || a.tokenCount < b.tokenCount ? b.sectionPath : a.sectionPath,
+    bbox: unionBBox([a.bbox, b.bbox]),
+    text,
+    overlapPrefix: a.overlapPrefix,
+    tokenCount: estimateTokens(text),
+  };
+}
+
+async function* packBlocks(
   blocks: AsyncIterable<DocBlock>,
   opts: ChunkerOptions,
 ): AsyncIterable<DraftChunk> {
@@ -196,7 +253,7 @@ export async function* chunkBlocks(
       kind: kindOverride ?? chunkKindFor(contributing),
       locator,
       sectionPath,
-      bbox: unionBBox(contributing),
+      bbox: unionBBox(contributing.map((block) => block.bbox)),
       text,
       overlapPrefix:
         canOverlap && overlapTokens > 0

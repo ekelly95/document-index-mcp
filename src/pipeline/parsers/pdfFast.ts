@@ -5,16 +5,15 @@ import type {
   DocumentParser,
   DocumentSource,
 } from "../ir.js";
-import { log } from "../../log.js";
 import {
   assembleLines,
   isPageNumberLine,
   loadPdf,
   pdfMetadata,
-  samplePageNumbers,
   type LoadedPdf,
   type PdfLine,
 } from "./pdfCommon.js";
+import { analyseStructure, isCitationMarkerLine, type StructureAnalysis } from "./pdfStructure.js";
 
 /**
  * PDF with a usable text layer -> IR.
@@ -26,46 +25,19 @@ import {
  * embedded bookmarks.
  */
 
-/** A line larger than body text by this factor reads as a heading. */
-const HEADING_SIZE_RATIO = 1.15;
 /** Vertical gap, as a multiple of font size, that ends a paragraph. */
 const PARAGRAPH_GAP_RATIO = 1.6;
-/** Pages sampled to learn body font size and running headers. */
-const ANALYSIS_SAMPLE = 20;
+/**
+ * Pages read to learn the document's heading styles and running headers. All
+ * of them up to this many: a chapter-heading style can occur on 5% of a book's
+ * pages, and a 20-page sample used to miss it entirely.
+ */
+const MAX_ANALYSED_PAGES = 600;
 /** A wrapped heading's continuation may sit this many line heights below it. */
 const HEADING_WRAP_GAP_RATIO = 2;
 /** Lines a single heading may span, and the characters it may run to. */
 const HEADING_WRAP_MAX_LINES = 4;
 const HEADING_WRAP_MAX_CHARS = 200;
-
-/**
- * Above BOTH of these, the font-size signal is noise and is discarded.
- *
- * Measured across the stress corpus. A clean document has two to five heading
- * tiers and produces at most ~1.5 heading lines per page; a 408-page scan
- * carrying an OCR text layer produced TWELVE tiers and 6.9 heading lines per
- * page, because OCR font sizes are a near-continuum rather than a few chosen
- * values. Nearly every line cleared the body-size ratio, so 2,824 lines became
- * headings, the outline grew to 2,476 nodes of fragments, and — the damage
- * that matters — every spurious heading became a chunk boundary, shattering
- * the book into 2,766 chunks averaging 65 tokens against a 350 target.
- *
- * Both conditions are required, because either alone has a legitimate
- * counter-example: a glossary is all headings at ONE size, and a title page
- * can carry several sizes across very few lines.
- */
-const MAX_TRUSTED_TIERS = 6;
-const MAX_TRUSTED_HEADINGS_PER_PAGE = 3;
-
-interface PageAnalysis {
-  bodySize: number;
-  /** Sizes above body size, largest first. Only ranks a heading; never gates one. */
-  headingSizes: number[];
-  /** False when the sizes read as OCR noise. See MAX_TRUSTED_* above. */
-  trustSizes: boolean;
-  /** Normalised text of lines that repeat across pages as headers/footers. */
-  runningText: Set<string>;
-}
 
 /** One open section, and the font size that opened it. */
 interface TrailEntry {
@@ -148,8 +120,9 @@ export class PdfFastParser implements DocumentParser {
       const lines = assembleLines(content.items).filter(
         (line) =>
           line.text.length > 0 &&
-          !analysis.runningText.has(normalise(line.text)) &&
-          !isPageNumberLine(line.text),
+          !analysis.isRunning(line, viewport.height) &&
+          !isPageNumberLine(line.text) &&
+          !isCitationMarkerLine(line.text),
       );
 
       const bookmark = trailByPage.get(pageNumber - 1);
@@ -212,7 +185,7 @@ export class PdfFastParser implements DocumentParser {
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
-        const level = headingLevelFor(line.size, analysis);
+        const level = analysis.headingLevel(line);
 
         if (level !== null) {
           const pending = flushParagraph();
@@ -242,7 +215,7 @@ export class PdfFastParser implements DocumentParser {
             const ranToTheEdge = previous.x1 >= rightEdge - line.size;
             if (
               Math.abs(next.size - line.size) >= 0.5 ||
-              headingLevelFor(next.size, analysis) === null ||
+              !analysis.isHeadingStyle(next) ||
               gap <= 0 ||
               gap > line.size * HEADING_WRAP_GAP_RATIO ||
               !(centred || ranToTheEdge) ||
@@ -256,17 +229,20 @@ export class PdfFastParser implements DocumentParser {
           const text = joinWrapped(group);
 
           const top = stack.at(-1);
-          let opensAt = line.size;
+          // Compared at the 0.1pt precision styles are recognised at: a figure
+          // title set at 12.63pt must not outrank 12.60pt section headings.
+          const size = Math.round(line.size * 10) / 10;
+          let opensAt = size;
           let carried = text;
           if (top && namesSameSection(text, top.text)) {
             // The same section, printed. Keep whichever name is fuller — the
             // bookmark usually has the whole title where the page shows only
             // the line that fitted — and keep its authority.
             carried = top.text.length >= text.length ? top.text : text;
-            opensAt = Math.max(top.size, line.size);
+            opensAt = Math.max(top.size, size);
             stack.pop();
           } else {
-            while (stack.length > 0 && stack[stack.length - 1]!.size <= line.size) {
+            while (stack.length > 0 && stack[stack.length - 1]!.size <= size) {
               stack.pop();
             }
           }
@@ -338,98 +314,27 @@ export function joinWrapped(lines: readonly { text: string }[]): string {
 }
 
 /**
- * Which heading tier a line's size puts it in, or null for body text.
- *
- * Membership of `headingSizes` used to be REQUIRED, which made detection a
- * function of what the sample happened to see: the 9/11 Commission Report's
- * chapter headings are 16pt on perhaps 5% of its 585 pages, so twenty samples
- * could miss the size entirely and silently demote every one of them to body
- * text. Size above body size is the test; the tier list only ranks it, and an
- * unsampled size takes the rank its magnitude earns.
+ * Learn the document's heading styles and running headers from its pages.
+ * See `pdfStructure.ts` for the rules.
  */
-function headingLevelFor(size: number, analysis: PageAnalysis): number | null {
-  if (!analysis.trustSizes) return null;
-  if (size < analysis.bodySize * HEADING_SIZE_RATIO) return null;
-  const exact = analysis.headingSizes.findIndex((s) => Math.abs(s - size) < 0.5);
-  const rank = exact === -1 ? analysis.headingSizes.filter((s) => s > size).length : exact;
-  return Math.min(6, rank + 1);
-}
-
-/**
- * Learn the body font size and the running header/footer text.
- *
- * Body size is weighted by character count rather than by line count: a page
- * has few headings but they are visually prominent, and weighting by lines
- * lets a heading-heavy contents page redefine what "body" means.
- */
-async function analysePages({ doc }: LoadedPdf): Promise<PageAnalysis> {
-  // Spread across the whole document, first and last page included. The
-  // stepping loop this replaced never reached the tail — 400 pages sampled 1,
-  // 21 … 381, and a 21-to-39-page document sampled only pages 1 to 20 — so a
-  // heading size used solely later on was never learned as a tier, and every
-  // such heading was silently demoted to body text. (`samplePageNumbers` gets
-  // the tail right but is deliberately sparse, because the probe pays to
-  // rasterise; this pass only reads text, so it can afford the density.)
-  const count = Math.min(ANALYSIS_SAMPLE, doc.numPages);
-  const sampled: number[] = [];
-  for (let i = 0; i < count; i++) {
-    sampled.push(1 + Math.round((i * (doc.numPages - 1)) / Math.max(1, count - 1)));
-  }
-
-  const weightBySize = new Map<number, number>();
-  /** Lines per size, alongside characters per size — the noise test counts lines. */
-  const linesBySize = new Map<number, number>();
-  const edgeCounts = new Map<string, number>();
-
-  for (const pageNumber of sampled) {
-    const page = await doc.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const lines = assembleLines(content.items);
-
-    for (const line of lines) {
-      const size = Math.round(line.size * 2) / 2;
-      weightBySize.set(size, (weightBySize.get(size) ?? 0) + line.text.length);
-      linesBySize.set(size, (linesBySize.get(size) ?? 0) + 1);
-    }
-    // Only the first and last lines can be a running header or footer.
-    for (const edge of [lines[0], lines.at(-1)]) {
-      if (!edge) continue;
-      const key = normalise(edge.text);
-      if (key.length < 3) continue;
-      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
-    }
-  }
-
-  const bodySize =
-    [...weightBySize.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 11;
-
-  const headingSizes = [...weightBySize.keys()]
-    .filter((s) => s >= bodySize * HEADING_SIZE_RATIO)
-    .sort((a, b) => b - a);
-
-  // Repeating on most sampled pages means it is furniture, not content. Needs
-  // enough samples to be meaningful, or a two-page document loses its title.
-  const threshold = Math.max(3, Math.ceil(sampled.length * 0.5));
-  const runningText = new Set(
-    [...edgeCounts.entries()]
-      .filter(([, count]) => count >= threshold)
-      .map(([key]) => key),
+async function analysePages({ doc }: LoadedPdf): Promise<StructureAnalysis> {
+  const count = Math.min(MAX_ANALYSED_PAGES, doc.numPages);
+  const pageNumbers = Array.from({ length: count }, (_, i) =>
+    count === doc.numPages ? i + 1 : 1 + Math.round((i * (doc.numPages - 1)) / Math.max(1, count - 1)),
   );
 
-  // Is the size signal worth believing at all? See MAX_TRUSTED_* above.
-  const headingLines = headingSizes.reduce((n, s) => n + (linesBySize.get(s) ?? 0), 0);
-  const perPage = headingLines / sampled.length;
-  const trustSizes =
-    headingSizes.length <= MAX_TRUSTED_TIERS || perPage <= MAX_TRUSTED_HEADINGS_PER_PAGE;
-  if (!trustSizes) {
-    log.warn(
-      `font sizes read as OCR noise (${headingSizes.length} heading tiers, ` +
-        `${perPage.toFixed(1)} heading lines per page); structure will come ` +
-        `from bookmarks alone`,
-    );
+  const pages = [];
+  for (const pageNumber of pageNumbers) {
+    const page = await doc.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pages.push({
+      height: page.getViewport({ scale: 1 }).height,
+      lines: assembleLines(content.items).filter(
+        (line) => !isPageNumberLine(line.text) && !isCitationMarkerLine(line.text),
+      ),
+    });
   }
-
-  return { bodySize, headingSizes, trustSizes, runningText };
+  return analyseStructure(pages);
 }
 
 /**
