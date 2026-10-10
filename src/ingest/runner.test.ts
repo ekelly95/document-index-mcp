@@ -26,7 +26,8 @@ import {
 } from "../embeddings/embedder.js";
 import { hybridSearch } from "../retrieval/hybrid.js";
 import { createIngestQueue, type IngestQueue } from "./queue.js";
-import { beginIngest, drainIngests, resumeIngests } from "./runner.js";
+import { beginIngest, describePagesWithoutText, drainIngests, resumeIngests } from "./runner.js";
+import { buildPdf } from "../testing/pdfFixture.js";
 
 /**
  * Ingest lifecycle, driven directly rather than over MCP.
@@ -584,4 +585,64 @@ test("one ready plus one processing is the legal interim state for a path", asyn
   );
   assert.deepEqual(await lexicalHits("starlight"), []);
   assert.deepEqual(await lexicalHits("gradients"), [stalled.documentId]);
+});
+
+test("pages that yielded no text are named in the document's warning", () => {
+  assert.equal(describePagesWithoutText([], 10), null);
+  assert.equal(
+    describePagesWithoutText(
+      [
+        { page: 3, reason: "image-only" },
+        { page: 7, reason: "image-only" },
+        { page: 8, reason: "image-only" },
+        { page: 9, reason: "image-only" },
+        { page: 12, reason: "ocr-low-confidence" },
+      ],
+      40,
+    ),
+    "5 of 40 page(s) yielded no text and are not searchable " +
+      "(image only, no text layer: pp. 3, 7–9; OCR confidence too low to keep: p. 12).",
+  );
+  const many = Array.from({ length: 25 }, (_, i) => ({ page: i * 2 + 1, reason: "image-only" as const }));
+  assert.match(describePagesWithoutText(many, 60)!, /and 5 more\)\.$/);
+});
+
+test("an ingested PDF with an image-only page finishes with a warning naming it", async () => {
+  await fs.writeFile(
+    path.join(library, "plate.pdf"),
+    buildPdf({
+      pages: [
+        { lines: [{ text: "Chapter one opens with ordinary prose.", x: 72, y: 700, size: 11 }] },
+        { lines: [{ text: "Chapter one goes on for another page.", x: 72, y: 700, size: 11 }] },
+        { lines: [], imageOnly: true },
+        { lines: [{ text: "Chapter two carries on after the plate.", x: 72, y: 700, size: 11 }] },
+      ],
+    }),
+  );
+  const handle = await beginIngest(contextWith(stubInit()), "plate.pdf");
+  await handle.done;
+
+  const row = db.prepare("SELECT * FROM documents WHERE id = ?").get(handle.documentId) as DocumentRow;
+  assert.equal(row.ingest_status, "ready");
+  assert.match(row.ingest_warning ?? "", /1 of 4 page\(s\) yielded no text.*p\. 3/);
+});
+
+test("ingesting a byte-identical copy says the document moved, and from where", async () => {
+  const body = "# Copy\n\nThe same words, in two places.\n";
+  await fs.writeFile(path.join(library, "first.md"), body);
+  await fs.writeFile(path.join(library, "second.md"), body);
+
+  const first = await beginIngest(contextWith(stubInit()), "first.md");
+  await first.done;
+  assert.equal(first.movedFrom, null);
+
+  const again = await beginIngest(contextWith(stubInit()), "first.md");
+  assert.equal(again.outcome, "reused");
+  assert.equal(again.movedFrom, null, "re-ingesting in place is not a move");
+
+  const copy = await beginIngest(contextWith(stubInit()), "second.md");
+  assert.equal(copy.outcome, "reused");
+  assert.equal(copy.documentId, first.documentId);
+  assert.equal(copy.movedFrom, "first.md");
+  assert.deepEqual(docsAtPath("first.md"), []);
 });

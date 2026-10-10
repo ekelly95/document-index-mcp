@@ -20,7 +20,9 @@ export type DocxBlockSpec =
   /** A paragraph carrying an arbitrary style id, e.g. a localized heading. */
   | { styled: string; style: string }
   /** Blocks wrapped in a body-level content control (`w:sdt`). */
-  | { sdt: DocxBlockSpec[] };
+  | { sdt: DocxBlockSpec[] }
+  /** Body XML written verbatim, for markup the other shapes do not cover. */
+  | { xml: string };
 
 /** One `w:style` entry for word/styles.xml. */
 export interface DocxStyleSpec {
@@ -85,6 +87,7 @@ function blockXml(block: DocxBlockSpec, notes: NoteAllocator): string {
       notes.ref(block.note),
     );
   }
+  if ("xml" in block) return block.xml;
   if ("paragraph" in block) return para(block.paragraph, "", notes.ref(block.note));
   if ("styled" in block) return para(block.styled, `<w:pStyle w:val="${esc(block.style)}"/>`);
   if ("sdt" in block) {

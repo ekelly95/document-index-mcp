@@ -74,7 +74,7 @@ jobs:
           cache: pnpm
 
       # No model cache here on purpose. These jobs run against the stub
-      # embedder, so they neither download the 130MB model nor load ONNX — the
+      # embedder, so they neither download the ~65 MB model nor load ONNX — the
       # end-to-end file was the only thing that did, and it cost eleven of the
       # suite's twelve seconds on every job. The real model is covered once, by
       # the `real-model` job below, rather than six times here.

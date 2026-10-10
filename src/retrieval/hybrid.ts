@@ -64,6 +64,13 @@ const REFERENCE_EXCLUSION_OVERFETCH = 4;
  */
 const MAX_ESCALATIONS = 3;
 
+/**
+ * sqlite-vec refuses a KNN query with k above this ("k value in knn query too
+ * large"). Escalation once doubled past it on a large library and turned a
+ * filtered search into an error; a leg at the ceiling counts as exhausted.
+ */
+const VEC0_MAX_K = 4096;
+
 export interface SearchFilter {
   kind?: ChunkKind;
   sectionPrefix?: string;
@@ -270,6 +277,20 @@ export function semanticSnippet(text: string, query: string, maxChars = 300): st
   return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`;
 }
 
+/** The snippet length the tool contract promises. */
+export const SNIPPET_MAX_CHARS = 300;
+
+/**
+ * Hold a snippet to the contract. FTS5's snippet() counts tokens, not
+ * characters, so twelve long tokens can run past it, and the semantic window
+ * adds its ellipses on top.
+ */
+function capSnippet(snippet: string): string {
+  if (snippet.length <= SNIPPET_MAX_CHARS) return snippet;
+  // A lone high surrogate left by the cut is dropped, not shown as garbage.
+  return `${snippet.slice(0, SNIPPET_MAX_CHARS - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…`;
+}
+
 export async function hybridSearch(
   db: Db,
   embedder: Embedder,
@@ -289,13 +310,15 @@ export async function hybridSearch(
   const excludesReferences = q.filter?.kind === undefined;
 
   let lexicalLimit = q.k * (lexicalPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
-  let semanticLimit =
+  let semanticLimit = Math.min(
+    VEC0_MAX_K,
     q.k *
-    (selective
-      ? POST_FILTER_OVERFETCH
-      : excludesReferences
-        ? REFERENCE_EXCLUSION_OVERFETCH
-        : PUSHED_DOWN_OVERFETCH);
+      (selective
+        ? POST_FILTER_OVERFETCH
+        : excludesReferences
+          ? REFERENCE_EXCLUSION_OVERFETCH
+          : PUSHED_DOWN_OVERFETCH),
+  );
   const semanticPostFiltered = selective || excludesReferences;
 
   // Embedded once, not once per escalation round.
@@ -315,11 +338,12 @@ export async function hybridSearch(
     // that returned less is exhausted, and asking again would re-scan the same
     // corpus for the same answer.
     const lexicalSaturated = lexicalPostFiltered && lexical.ids.length === lexicalLimit;
-    const semanticSaturated = semanticPostFiltered && semantic.length === semanticLimit;
+    const semanticSaturated =
+      semanticPostFiltered && semantic.length === semanticLimit && semanticLimit < VEC0_MAX_K;
     if (!lexicalSaturated && !semanticSaturated) break;
 
     if (lexicalSaturated) lexicalLimit *= 2;
-    if (semanticSaturated) semanticLimit *= 2;
+    if (semanticSaturated) semanticLimit = Math.min(semanticLimit * 2, VEC0_MAX_K);
   }
 
   if (vector) {
@@ -343,7 +367,7 @@ export async function hybridSearch(
  * Weighted Reciprocal Rank Fusion over the two legs' candidate lists.
  *
  * Exported, like the other pure parts of this module, so the ranking property
- * can be pinned in a test without standing up a database and a 130MB model.
+ * can be pinned in a test without standing up a database and the embedding model.
  * Returns `[chunkRowid, score]` pairs, best first.
  */
 export function fuseRankings(
@@ -409,7 +433,7 @@ function fuseAndHydrate(
     hits.push({
       row,
       score,
-      snippet: lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query),
+      snippet: capSnippet(lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query)),
       similarity: null,
       lexicalMatch: lexical.snippets.has(id),
     });

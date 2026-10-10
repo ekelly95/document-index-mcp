@@ -47,10 +47,10 @@ CREATE TABLE IF NOT EXISTS documents (
   chunk_count     INTEGER NOT NULL DEFAULT 0,       -- also serves as ingest progress
   embedding_model TEXT,                             -- e.g. 'fast-bge-small-en-v1.5'
   outline_json    TEXT NOT NULL DEFAULT '[]',
-  ingest_status   TEXT NOT NULL DEFAULT 'pending'
+  ingest_status   TEXT NOT NULL DEFAULT 'pending'   -- never written: inserts claim as 'processing'. Kept to avoid a schema bump
                     CHECK (ingest_status IN ('pending','processing','ready','failed')),
   error_message   TEXT,
-  ingest_warning  TEXT,                             -- set at ingest when a parser knows it skipped real content; survives markReady. No parser sets it today (see ir.ts)
+  ingest_warning  TEXT,                             -- content known skipped: pages that yielded no text (ParseReport, ir.ts), set when the document is finalised
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );

@@ -171,7 +171,19 @@ function canMerge(a: DraftChunk, b: DraftChunk, max: number): boolean {
   if (a.locator.value !== b.locator.value) return false;
   if (ISOLATED_KINDS.has(a.kind) || ISOLATED_KINDS.has(b.kind)) return false;
   if (a.tokenCount >= MIN_CHUNK_TOKENS && b.tokenCount >= MIN_CHUNK_TOKENS) return false;
+  // Across sections, only forward: a fragment (a cover line, a heading) may
+  // join the section that follows it and take that section's path. Backward,
+  // a short subsection opener ("### B" and one sentence) folded into the
+  // previous section and was cited under it. Refusing forward merges too left
+  // the fragment standing alone as the hub chunk this pass exists to remove.
+  if (!samePath(a.sectionPath, b.sectionPath) && a.kind !== "heading" && a.tokenCount >= MIN_CHUNK_TOKENS) {
+    return false;
+  }
   return a.tokenCount + b.tokenCount <= max;
+}
+
+function samePath(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((segment, i) => segment === b[i]);
 }
 
 function merge(a: DraftChunk, b: DraftChunk): DraftChunk {
@@ -180,7 +192,9 @@ function merge(a: DraftChunk, b: DraftChunk): DraftChunk {
     // A heading-only fragment joins the body it introduces and takes its path.
     kind: a.kind === b.kind ? a.kind : a.kind === "heading" ? b.kind : "text",
     locator: a.locator,
-    sectionPath: a.kind === "heading" || a.tokenCount < b.tokenCount ? b.sectionPath : a.sectionPath,
+    // Within a section the paths are equal; across one, canMerge allows only
+    // a forward merge, which files the result under the section that follows.
+    sectionPath: b.sectionPath,
     bbox: unionBBox([a.bbox, b.bbox]),
     text,
     overlapPrefix: a.overlapPrefix,
@@ -323,6 +337,15 @@ async function* packBlocks(
       continue;
     }
 
+    // A section can change with no heading block to mark it: a PDF bookmark
+    // re-bases the trail at a line style detection did not take for a
+    // heading. Packed together, the two sections' text was filed under the
+    // second one's path.
+    if (block.kind !== "heading") {
+      const body = buf.findLast((b) => b.kind !== "heading");
+      if (body && !samePath(body.sectionPath, block.sectionPath)) yield* drain(false);
+    }
+
     if (bufTokens > 0 && bufTokens + blockTokens > max) {
       yield* drain(false);
     }
@@ -367,6 +390,10 @@ async function* fitOne(
   depth: number,
 ): AsyncIterable<DraftChunk> {
   const real = await count(chunk.text);
+  // The depth limit and the no-progress check below are backstops: the
+  // splitters always cut to the ceiling they are given, so a part that is
+  // still over after a round needs a tokenizer wildly out of step with the
+  // estimate. They keep a pathological counter from looping, not from passing.
   if (real <= budget || depth >= 4) {
     yield chunk;
     return;

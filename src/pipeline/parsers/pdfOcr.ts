@@ -6,6 +6,8 @@ import type {
   DocumentMetadata,
   DocumentParser,
   DocumentSource,
+  PageWithoutText,
+  ParseReport,
 } from "../ir.js";
 import {
   assembleLines,
@@ -63,7 +65,14 @@ export interface PdfOcrOptions {
 type PageBlock = Omit<DocBlock, "sectionPath">;
 
 export class PdfOcrParser implements DocumentParser {
+  private readonly pagesWithoutText: PageWithoutText[] = [];
+
   constructor(private readonly opts: PdfOcrOptions) {}
+
+  report(): ParseReport {
+    // Pages are recognised concurrently, so they are recorded out of order.
+    return { pagesWithoutText: [...this.pagesWithoutText].sort((a, b) => a.page - b.page) };
+  }
 
   metadata(src: DocumentSource): Promise<DocumentMetadata> {
     return pdfMetadata(src);
@@ -75,14 +84,16 @@ export class PdfOcrParser implements DocumentParser {
     const labels = await doc.getPageLabels();
 
     // OCR emits no headings, so the section trail is a pure function of page
-    // index — the most recent bookmark at or before it — and can be computed
-    // up front instead of sequencing the pipeline.
+    // index and can be computed up front instead of sequencing the pipeline.
+    // A page is filed under its first bookmark (recognised lines are not
+    // placed against destinations), and later pages inherit its last.
     const byPage = await bookmarkTrails(loaded);
     const trails: string[][] = [];
     let trail: string[] = [];
     for (let i = 0; i < doc.numPages; i++) {
-      trail = byPage.get(i) ?? trail;
-      trails.push(trail);
+      const starts = byPage.get(i) ?? [];
+      trails.push(starts[0]?.trail ?? trail);
+      trail = starts.at(-1)?.trail ?? trail;
     }
 
     const release = holdOcrPool();
@@ -148,7 +159,11 @@ export class PdfOcrParser implements DocumentParser {
     ) {
       return textLayerBlocks(page, lines, locator);
     }
-    return ocrBlocks(page, scheduler, locator);
+    const { blocks, recognised } = await ocrBlocks(page, scheduler, locator);
+    if (blocks.length === 0 && recognised) {
+      this.pagesWithoutText.push({ page: pageNumber, reason: "ocr-low-confidence" });
+    }
+    return blocks;
   }
 }
 
@@ -207,21 +222,28 @@ function textLayerBlocks(
   return blocks;
 }
 
-/** Paragraphs recognised from the page's imagery. */
+/**
+ * Paragraphs recognised from the page's imagery, and whether tesseract found
+ * any lines at all — zero blocks from a page that had lines means every one
+ * scored too low to keep, which is content lost rather than a blank page.
+ */
 async function ocrBlocks(
   page: PDFPageProxy,
   scheduler: OcrScheduler,
   locator: PageLocator,
-): Promise<PageBlock[]> {
+): Promise<{ blocks: PageBlock[]; recognised: boolean }> {
   const { png, width, height } = await renderPageToPng(page);
   const result = await scheduler.addJob("recognize", png, {}, { text: true, blocks: true });
 
   const blocks: PageBlock[] = [];
+  let recognised = false;
   for (const block of result.data.blocks ?? []) {
     for (const para of block.paragraphs) {
-      const kept = para.lines
+      const lines = para.lines
         .map((line) => ({ ...line, text: line.text.trim() }))
-        .filter((line) => line.text.length > 0 && line.confidence >= OCR_MIN_LINE_CONFIDENCE);
+        .filter((line) => line.text.length > 0);
+      if (lines.length > 0) recognised = true;
+      const kept = lines.filter((line) => line.confidence >= OCR_MIN_LINE_CONFIDENCE);
       if (kept.length === 0) continue;
       const text = joinWrapped(kept);
       if (text.trim().length === 0 || isPageNumberLine(text) || isCitationMarkerLine(text)) continue;
@@ -240,7 +262,7 @@ async function ocrBlocks(
       });
     }
   }
-  return blocks;
+  return { blocks, recognised };
 }
 
 /**

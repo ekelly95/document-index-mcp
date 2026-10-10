@@ -1,5 +1,5 @@
 import type { DocumentSource } from "../ir.js";
-import { loadPdf, samplePageNumbers } from "./pdfCommon.js";
+import { loadPdf, paintsImage, samplePageNumbers } from "./pdfCommon.js";
 
 /**
  * Cheap content probe over a handful of evenly spaced pages.
@@ -79,7 +79,6 @@ export async function probePdf(src: DocumentSource): Promise<PdfProbe> {
   // Shares the source's one pdfjs document with the parser that follows it,
   // and does not dispose it: the source owns that.
   const { doc } = await loadPdf(src);
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const sampledPages = samplePageNumbers(doc.numPages);
 
   let pagesWithText = 0;
@@ -99,9 +98,8 @@ export async function probePdf(src: DocumentSource): Promise<PdfProbe> {
       if (!usableTextLayer(text)) {
         mojibakePages.push(pageNumber);
       }
-    } else {
-      const ops = await page.getOperatorList();
-      if (ops.fnArray.includes(pdfjs.OPS.paintImageXObject)) pagesWithImagery++;
+    } else if (await paintsImage(page)) {
+      pagesWithImagery++;
     }
   }
 

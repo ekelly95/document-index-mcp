@@ -226,6 +226,44 @@ test("prose chunks stay within the token cap", async () => {
   }
 });
 
+test("one unsplittable line is still cut to the cap", async () => {
+  // A minified line in a fence: no line break, no space. It used to become a
+  // single 60,000-character chunk that no read could bound.
+  const line = "a=1;".repeat(15_000);
+  const chunks = await collect([block("code", ["```js", line, "```"].join("\n"), 1)]);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.tokenCount <= MAX_TOKENS, `chunk of ${chunk.tokenCount} tokens`);
+    assert.equal(chunk.kind, "code");
+  }
+  assert.equal(
+    chunks.map((c) => c.text.replace(/^```js\n|\n```$/g, "")).join(""),
+    line,
+    "characters were lost",
+  );
+});
+
+test("fitToBudget terminates when the tokenizer is never satisfied", async () => {
+  // A counter that is never satisfied: without the depth limit this splits
+  // until every part is one character.
+  const draft: DraftChunk = {
+    kind: "text",
+    locator: { type: "page", value: "1", ordinal: 0 },
+    sectionPath: [],
+    bbox: null,
+    text: "word ".repeat(2_000).trim(),
+    overlapPrefix: null,
+    tokenCount: 2_500,
+  };
+  async function* one() {
+    yield draft;
+  }
+  const out: DraftChunk[] = [];
+  for await (const c of fitToBudget(one(), async () => Number.MAX_SAFE_INTEGER, 100)) out.push(c);
+  assert.ok(out.length > 1);
+  assert.equal(out.map((c) => c.text).join(" "), draft.text, "text was lost");
+});
+
 test("an empty stream produces no chunks", async () => {
   assert.deepEqual(await collect([]), []);
 });
@@ -314,4 +352,57 @@ test("a fragment folds into its neighbour on the same page, never across pages o
     ],
   );
   assert.ok(out[4]!.text.endsWith("(figure label)"));
+});
+
+test("a short subsection opener stays in its own section, not the one before", async () => {
+  // "### B" and one sentence is under the fragment threshold. It used to fold
+  // back into A's last chunk and take A's path, so B was cited as A and its
+  // outline span started a chunk late.
+  const opener = [
+    block("paragraph", prose("A", 6), 1, ["A"]),
+    block("heading", "### B", 1, ["A"], 3),
+    block("paragraph", "B opens briefly.", 1, ["A", "B"]),
+  ];
+
+  for (const rest of [
+    [block("paragraph", prose("B", 6), 1, ["A", "B"])], // B's body follows on the page
+    [block("paragraph", prose("C", 6), 2, ["A", "B"])], // the page ends first
+  ]) {
+    const chunks = await collect([...opener, ...rest]);
+    const underA = chunks.filter((c) => c.sectionPath.join("›") === "A");
+    assert.ok(underA.every((c) => !c.text.includes("B opens")), "B's opener was filed under A");
+    const withHeading = chunks.find((c) => c.text.includes("### B"))!;
+    assert.deepEqual(withHeading.sectionPath, ["A", "B"]);
+    assert.ok(withHeading.text.includes("B opens briefly."));
+  }
+});
+
+test("a section change with no heading block still starts a new chunk", async () => {
+  // Measured on "Attention Is All You Need": its 3.2 bookmark re-bases the
+  // trail at a line style detection did not call a heading, so the Decoder
+  // paragraph of 3.1 and the opening of 3.2 were packed together and the
+  // whole chunk was cited as 3.2.
+  const chunks = await collect([
+    block("paragraph", prose("Decoder", 3), 3, ["Model", "Stacks"]),
+    block("paragraph", "3.2 Attention", 3, ["Model", "Attention"]),
+    block("paragraph", prose("Attention", 2), 3, ["Model", "Attention"]),
+  ]);
+  const decoder = chunks.find((c) => c.text.includes("Decoder sentence 0"))!;
+  assert.deepEqual(decoder.sectionPath, ["Model", "Stacks"]);
+  assert.ok(!decoder.text.includes("3.2 Attention"), "3.2's opening was packed into 3.1");
+  const attention = chunks.find((c) => c.text.includes("3.2 Attention"))!;
+  assert.deepEqual(attention.sectionPath, ["Model", "Attention"]);
+});
+
+test("a fragment before a section folds forward into it rather than standing alone", async () => {
+  // The 9/11 report's title page: a cover line with no section, then a
+  // detected heading opening the next. Refused, the cover line became a
+  // six-token chunk of its own — the hub fragment merging exists to remove.
+  const chunks = await collect([
+    block("paragraph", "THE 9/11 COMMISSION REPORT", 3, []),
+    block("heading", "Final Report of the Commission", 3, [], 1),
+    block("paragraph", prose("Sale", 2), 3, ["Final Report of the Commission"]),
+  ]);
+  assert.equal(chunks.length, 1, `got ${chunks.map((c) => JSON.stringify(c.text.slice(0, 30))).join(", ")}`);
+  assert.deepEqual(chunks[0]!.sectionPath, ["Final Report of the Commission"]);
 });

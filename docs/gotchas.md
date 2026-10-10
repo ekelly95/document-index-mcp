@@ -180,12 +180,12 @@ Worth knowing before the first scan goes in:
   both claimed for a while that the embedding model was the only one.
 - **`--ocr-lang-path` avoids that download**, for an offline machine or a pinned copy. Two things
   decide whether it works. It is consulted **only on a cache miss**, so once `<models>/tesseract/`
-  holds the file the flag does nothing and looks broken. And the filename must match what is there:
-  tesseract.js asks for `<lang>.traineddata.gz` or `<lang>.traineddata` depending on its `gzip`
-  option, and it does not sniff. The npm `@tesseract.js-data` packages ship the gzipped form;
-  everything under `tesseract-ocr/tessdata_fast` and `tessdata_best` is plain. `buildScheduler`
-  looks in the directory and sets `gzip` accordingly, so either layout works — but only one form
-  per directory, and with `deu+eng` every language must use the same form.
+  holds the file the flag does nothing and looks broken. Either file form works, per language:
+  `stageLanguageData` (`ocrPool.ts`) looks for `<lang>.traineddata` then `<lang>.traineddata.gz`,
+  gunzips whatever it found by its magic bytes, and writes plain `<lang>.traineddata` into the cache.
+  Workers only ever read the cache, so there is no `gzip` option to keep in step with the files —
+  the npm `@tesseract.js-data` packages (gzipped) and `tessdata_fast`/`tessdata_best` (plain) can
+  even be mixed under `deu+eng`.
 - **A shutdown mid-OCR abandons the run** after the 10s drain; the lease expires, the next start
   marks it failed, and re-ingesting starts the OCR over. Nothing already `ready` is affected.
 - **Mojibake books are OCR'd wholesale.** A wrong-encoding text layer looks printable page by page,

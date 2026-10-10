@@ -60,11 +60,30 @@ export interface DocumentMetadata {
   /** page / section count. */
   locatorCount: number;
   /**
-   * Set when the parser knows it skipped real content; persisted so the
-   * document never looks more indexed than it is. No parser sets it today (its
-   * only producer was the removed PPTX reader).
+   * Set when the parser knows, before parsing, that it will skip real content;
+   * persisted so the document never looks more indexed than it is. No parser
+   * sets it today (its only producer was the removed PPTX reader). Content
+   * found missing during the parse is reported through `ParseReport` instead.
    */
   warning?: string;
+}
+
+/** A page the parser reached but could take no text from. */
+export interface PageWithoutText {
+  /** 1-based physical page. */
+  page: number;
+  /**
+   * "image-only": no text layer, but imagery — a scanned plate or insert in an
+   * otherwise digital document. "ocr-low-confidence": recognised, but every
+   * line scored too low to keep. A page with neither text nor imagery is
+   * blank and not reported.
+   */
+  reason: "image-only" | "ocr-low-confidence";
+}
+
+/** What a parse skipped, known only once it has run. */
+export interface ParseReport {
+  pagesWithoutText: PageWithoutText[];
 }
 
 /**
@@ -100,6 +119,11 @@ export interface DocumentSource {
 export interface DocumentParser {
   parse(src: DocumentSource): AsyncIterable<DocBlock>;
   metadata(src: DocumentSource): Promise<DocumentMetadata>;
+  /**
+   * Read after `parse` has finished. Parsers are built per route, so one
+   * instance only ever describes one document.
+   */
+  report?(): ParseReport;
 }
 
 /**

@@ -211,3 +211,27 @@ test("localized and custom heading styles resolve through styles.xml", async () 
   assert.equal(meta.locatorCount, 4);
   assert.equal(meta.title, "Einleitung");
 });
+
+test("text under tracked changes is read once: moves at their destination, deletions not at all", async () => {
+  const run = (text: string) => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`;
+  const blocks = await collect(
+    open({
+      blocks: [
+        {
+          xml:
+            `<w:p>${run("Kept. ")}` +
+            `<w:moveFrom w:id="1" w:author="a" w:date="2026-01-01T00:00:00Z">${run("Moved sentence. ")}</w:moveFrom>` +
+            `<w:del w:id="2" w:author="a" w:date="2026-01-01T00:00:00Z"><w:r><w:delText>Deleted.</w:delText></w:r></w:del>` +
+            `</w:p>`,
+        },
+        {
+          xml:
+            `<w:p>${run("Later. ")}` +
+            `<w:moveTo w:id="3" w:author="a" w:date="2026-01-01T00:00:00Z">${run("Moved sentence.")}</w:moveTo>` +
+            `</w:p>`,
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(blocks.map((b) => b.text), ["Kept.", "Later. Moved sentence."]);
+});

@@ -11,7 +11,7 @@ import {
 /**
  * The pure parts of retrieval: query sanitisation, the section-path filter and
  * snippet selection. All three are exported precisely so they can be pinned
- * here without standing up a database and a 130MB embedding model.
+ * here without standing up a database and the ~65 MB embedding model.
  */
 
 const METHODS = ["Part II — Methods", "3.2 Sampling"];

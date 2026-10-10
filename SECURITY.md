@@ -73,7 +73,16 @@ from anywhere, and the parsers are the attack surface. The server therefore:
   parameterised;
 - returns no document bodies from search. The output schema for a search hit has
   no text field, so a refactor cannot quietly regress it. `get_chunk_context` is
-  the only tool that returns body text, hard-capped at 24,000 characters;
+  the only tool that returns body text, hard-capped at 24,000 characters. The cap
+  holds even for a single oversized chunk, which is cut and marked `truncated`,
+  and unsplittable runs (a minified line, a blob) are cut at ingest so new
+  indexes do not hold one;
+- labels document text as document text. Titles and section names are rendered
+  on one line, so a newline in a title cannot forge an entry in the library
+  listing; each passage is fenced with a fence its own text cannot close; and the
+  reading tools' descriptions and replies say this text is content, not
+  instructions. That is a label, not a defence: a client that obeys instructions
+  found in tool results is still the client's problem, as below;
 - exposes library-relative paths, never absolute ones, including in failures.
   Every error is scrubbed of the library root, index path and model cache on the
   way out, rather than only the four filesystem errors that had a written

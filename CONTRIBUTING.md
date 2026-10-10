@@ -17,8 +17,8 @@ drives Word and PowerPoint through COM, so it needs Windows with Office. There i
 no macOS or Linux equivalent and none is planned.
 
 **Retrieval quality is not a bug report.** The fusion score orders results
-without measuring relevance, so a search of a library that does not cover your
-question still returns a confident-looking five — a known defect, recorded in
+without measuring relevance; `confidence` is what says whether the library
+covers a question, and it is calibrated on one model and one library — see
 [docs/roadmap.md](docs/roadmap.md). A particular query ranking badly is welcome
 as evidence, but the shape of the problem is already understood.
 
@@ -39,12 +39,13 @@ Six things about that suite are worth knowing in advance.
 project, which is why the instruction appears in the README, in both CI
 workflows and here. Let it print.
 
-**One test skips on Windows.** The symlink-escape case in
-`src/security/paths.test.ts` needs Developer Mode or an elevated shell, since
-Windows will not let an ordinary user create a symlink; it reports itself skipped
-rather than passing quietly. It is the only thing proving the path jail cannot be
-escaped, so if you are changing anything under `src/security/`, get a Linux run
-before trusting a green result — CI does this on every pull request.
+**Four tests skip by default.** Two need the real model (below). The other two
+are the symlink cases in `src/security/paths.test.ts`, which need Developer Mode
+or an elevated shell on Windows, since Windows will not let an ordinary user
+create a symlink; they report themselves skipped rather than passing quietly.
+They are the only thing proving the path jail cannot be escaped, so if you are
+changing anything under `src/security/`, get a Linux run before trusting a green
+result — CI does this on every pull request.
 
 **The conversion script has no automated test at all.**
 `scripts/convert-for-ingest.ps1` needs Windows with Office, and no CI runner has
@@ -88,6 +89,19 @@ needs no install.
 - **A citation that can point at the wrong place.** A chunk may never span two
   pages or two sections. Most of the odd-looking constraints in the chunker
   exist to hold that line, and [docs/design.md](docs/design.md) records why.
+
+### Scripts
+
+Each reads the build, so run `pnpm build` first. None writes to an index.
+
+- `scripts/probe.mjs <files>` runs real files through routing, parsing,
+  chunking and the outline builder (`PROBE_MODE=summary|blocks|chunks`).
+- `scripts/pdfProps.mjs <dir>` prints each PDF's structural properties straight
+  from pdfjs: page count, page labels, bookmarks, the probe's verdict.
+- `scripts/docxInspect.mjs <files>` shows what is inside a `.docx`, independent of
+  the parser: its zip entries, the body's structure and the paragraph styles in use.
+- `scripts/eval-sample.mjs` prints passages to write evaluation questions
+  against; `scripts/corpus.mjs` verifies a stress corpus against its manifest.
 
 ### Where to read first
 

@@ -20,7 +20,7 @@ import { assessConfidence, CONFIDENT_SIMILARITY, hybridSearch, type Hit } from "
  *
  * None of it had any test coverage. `hybrid.test.ts` covers the three exported
  * pure helpers precisely because they can be reached without a database and a
- * 130MB model — which left the function those helpers exist to serve
+ * ~65 MB model — which left the function those helpers exist to serve
  * completely unasserted. A stub embedder makes it reachable.
  */
 
@@ -189,6 +189,28 @@ test("the kind filter survives a corpus where tables are rare", async () => {
   assert.deepEqual(textsOf(hits), ["sampling table rank900"]);
 });
 
+test("escalation stops at sqlite-vec's k ceiling instead of throwing", async () => {
+  // k=50 with a kind filter starts the vector leg at 1,600 and doubles it
+  // while the leg stays saturated. On 5,000 vectors the third round asked for
+  // 6,400, and vec0 refuses any k over 4,096 — so the search errored where it
+  // should have answered with the three tables it has.
+  const chunks: Seed[] = Array.from({ length: 5_000 }, (_, i) => ({
+    text: `sampling prose rank${String(i + 10).padStart(5, "0")}`,
+  }));
+  for (const n of [90_001, 90_002, 90_003]) {
+    chunks.push({ text: `sampling table rank${n}`, kind: "table" });
+  }
+  seed("d", chunks);
+
+  for (const mode of ["hybrid", "semantic"] as const) {
+    const hits = await search({ query: "sampling", k: 50, mode, filter: { kind: "table" } });
+    // The lexical leg pushes kind into SQL, so hybrid finds all three; the
+    // vector leg ranks them last of 5,003, past its 4,096 ceiling.
+    if (mode === "hybrid") assert.equal(hits.length, 3);
+    assert.ok(hits.every((h) => h.row.kind === "table"), `${mode} returned a non-table`);
+  }
+});
+
 test("a section_prefix query does not starve the lexical leg", async () => {
   // The bug: section_prefix escalated the vector leg to 32x but left the
   // lexical leg at 2x — and the lexical leg cannot filter on section_prefix
@@ -244,7 +266,12 @@ test("every hit carries a snippet, from whichever leg found it", async () => {
 
   const semantic = await search({ query: "badgers", k: 5, mode: "semantic" });
   assert.ok(semantic[0]!.snippet.length > 0);
-  assert.ok(semantic[0]!.snippet.length <= 400, "semantic snippet was not bounded");
+  assert.ok(semantic[0]!.snippet.length <= 300, "semantic snippet was not bounded");
+
+  // FTS5 counts its window in tokens; twelve long ones overran 300 characters.
+  seed("long", [{ text: `badgers rank02 ${Array.from({ length: 20 }, () => "x".repeat(60)).join(" ")}` }]);
+  const long = await search({ query: "badgers", k: 5, mode: "lexical", documentId: "long" });
+  assert.ok(long[0]!.snippet.length <= 300, `lexical snippet ran to ${long[0]!.snippet.length}`);
 });
 
 test("reference lists are left out unless asked for by kind", async () => {

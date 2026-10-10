@@ -4,11 +4,14 @@ import type {
   DocumentMetadata,
   DocumentParser,
   DocumentSource,
+  PageWithoutText,
+  ParseReport,
 } from "../ir.js";
 import {
   assembleLines,
   isPageNumberLine,
   loadPdf,
+  paintsImage,
   pdfMetadata,
   type LoadedPdf,
   type PdfLine,
@@ -70,6 +73,12 @@ function namesSameSection(heading: string, current: string): boolean {
 }
 
 export class PdfFastParser implements DocumentParser {
+  private readonly pagesWithoutText: PageWithoutText[] = [];
+
+  report(): ParseReport {
+    return { pagesWithoutText: [...this.pagesWithoutText] };
+  }
+
   async *parse(src: DocumentSource): AsyncIterable<DocBlock> {
     // Not closed here: the source owns the pdfjs document and disposes it
     // when the ingest ends. The probe and the metadata pass share this exact
@@ -102,19 +111,27 @@ export class PdfFastParser implements DocumentParser {
           !isCitationMarkerLine(line.text),
       );
 
-      const bookmark = trailByPage.get(pageNumber - 1);
-      if (bookmark) {
-        const key = bookmark.join("\u0000");
-        // Only on the page where the section actually starts. Re-basing on
-        // every page would discard subsection depth built up since.
-        if (key !== currentBookmarkKey) {
-          // Infinity, so no detected heading can close a bookmarked section —
-          // only the next bookmark may. Bookmarks are the authoritative half.
-          stack = bookmark.map((text) => ({ text, size: Infinity }));
-          trail = [...bookmark];
-          currentBookmarkKey = key;
-        }
+      // A scanned plate in a digital book: the probe passed the document,
+      // and this page would otherwise vanish from the index without a word.
+      if (lines.length === 0 && (await paintsImage(page))) {
+        this.pagesWithoutText.push({ page: pageNumber, reason: "image-only" });
       }
+
+      const starts = trailByPage.get(pageNumber - 1) ?? [];
+      let nextStart = 0;
+      const rebase = (start: BookmarkStart) => {
+        const key = start.trail.join("\u0000");
+        // Only where the section actually starts. Re-basing again for the same
+        // bookmark would discard subsection depth built up since.
+        if (key === currentBookmarkKey) return;
+        // Infinity, so no detected heading can close a bookmarked section —
+        // only the next bookmark may. Bookmarks are the authoritative half.
+        stack = start.trail.map((text) => ({ text, size: Infinity }));
+        trail = [...start.trail];
+        currentBookmarkKey = key;
+      };
+      // A bookmark that names only the page starts its section at the top.
+      while (starts[nextStart]?.top === null) rebase(starts[nextStart++]!);
 
       const printed = labels?.[pageNumber - 1];
       const locator = {
@@ -162,6 +179,17 @@ export class PdfFastParser implements DocumentParser {
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!;
+
+        // A positioned bookmark takes effect at the first line that reaches
+        // it, so text above a mid-page section start stays in the section
+        // before. Half a line of slack: a destination often sits on the
+        // heading's baseline rather than above it.
+        while (nextStart < starts.length && line.yBaseline <= starts[nextStart]!.top! + line.size / 2) {
+          const pending = flushParagraph();
+          if (pending) yield pending;
+          rebase(starts[nextStart++]!);
+        }
+
         const level = analysis.headingLevel(line);
 
         if (level !== null) {
@@ -250,6 +278,8 @@ export class PdfFastParser implements DocumentParser {
 
       const tail = flushParagraph();
       if (tail) yield tail;
+      // Below the last line, or on a page with no text: the next page inherits.
+      while (nextStart < starts.length) rebase(starts[nextStart++]!);
     }
   }
 
@@ -299,15 +329,33 @@ async function analysePages({ doc }: LoadedPdf): Promise<StructureAnalysis> {
   return analyseStructure(pages);
 }
 
+/** Where a bookmarked section starts. */
+export interface BookmarkStart {
+  trail: string[];
+  /**
+   * The destination's top in PDF user space (origin bottom-left), or null
+   * when it names only the page (/Fit and friends).
+   */
+  top: number | null;
+}
+
+/** The top a destination array scrolls to, when it gives one. */
+function destinationTop(dest: readonly unknown[]): number | null {
+  const mode = (dest[1] as { name?: string } | undefined)?.name;
+  const value = mode === "XYZ" ? dest[3] : mode === "FitH" || mode === "FitBH" ? dest[2] : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 /**
- * Embedded bookmarks as a section trail per page index. Unresolvable
+ * Embedded bookmarks as section starts per page index, in reading order:
+ * page-level ones first, then by position down the page. Unresolvable
  * destinations are skipped rather than failing the document.
  */
-export async function bookmarkTrails({ doc }: LoadedPdf): Promise<Map<number, string[]>> {
+export async function bookmarkTrails({ doc }: LoadedPdf): Promise<Map<number, BookmarkStart[]>> {
   const outline = await doc.getOutline().catch(() => null);
   if (!outline || outline.length === 0) return new Map();
 
-  const byPage = new Map<number, string[]>();
+  const byPage = new Map<number, BookmarkStart[]>();
 
   type OutlineItem = Awaited<ReturnType<typeof doc.getOutline>>[number];
   const visit = async (items: readonly OutlineItem[], trail: string[]): Promise<void> => {
@@ -322,18 +370,44 @@ export async function bookmarkTrails({ doc }: LoadedPdf): Promise<Map<number, st
       if (!title) continue;
       const next = [...trail, title];
 
-      const dest = item.dest;
+      // A named destination (every LaTeX/hyperref PDF) is looked up in the
+      // catalog; skipping these left whole documents without a trail.
+      const dest =
+        typeof item.dest === "string"
+          ? await doc.getDestination(item.dest).catch(() => null)
+          : item.dest;
       const ref = Array.isArray(dest) ? dest[0] : null;
       if (ref && typeof ref === "object" && "num" in ref) {
         const index = await doc.getPageIndex(ref as never).catch(() => -1);
-        // First bookmark wins for a page: a later sibling starting on the same
-        // page should not overwrite the section that page actually opens.
-        if (index >= 0 && !byPage.has(index)) byPage.set(index, next);
+        if (index >= 0) {
+          const starts = byPage.get(index) ?? [];
+          starts.push({ trail: next, top: destinationTop(dest as unknown[]) });
+          byPage.set(index, starts);
+        }
       }
       if (item.items?.length) await visit(item.items, next);
     }
   };
 
   await visit(outline, []);
+  // Page-level first, then down the page (user-space y falls as it goes).
+  // Stable, so bookmarks at the same spot keep outline order.
+  const height = (s: BookmarkStart) => s.top ?? Number.POSITIVE_INFINITY;
+  for (const [index, starts] of byPage) {
+    starts.sort((a, b) => (height(a) === height(b) ? 0 : height(a) > height(b) ? -1 : 1));
+    // First wins at any one spot. A chapter and its first section routinely
+    // share a destination; applying both would nest the printed chapter
+    // heading under the section, and heading detection supplies the deeper
+    // level anyway.
+    byPage.set(
+      index,
+      starts.filter((s, i) => {
+        const prev = starts[i - 1];
+        if (!prev) return true;
+        if (s.top === null || prev.top === null) return s.top !== prev.top;
+        return Math.abs(s.top - prev.top) >= 1;
+      }),
+    );
+  }
   return byPage;
 }

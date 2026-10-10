@@ -22,7 +22,7 @@ test("the renamed environment and derived paths are the defaults", () => {
   // Cleared for the duration, because this test is about what the DEFAULTS
   // are: any of these set in the surrounding environment is the setting under
   // test being overridden by the machine. CI sets DOCUMENT_INDEX_MODEL_CACHE
-  // for every job so the 130MB model can be cached between runs, which made
+  // for every job so the ~65 MB model can be cached between runs, which made
   // this fail there and only there.
   const borrowed = ["DOCUMENT_INDEX_DB_PATH", "DOCUMENT_INDEX_MODEL_CACHE"].map(
     (name) => [name, process.env[name]] as const,

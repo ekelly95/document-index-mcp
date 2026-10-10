@@ -1,7 +1,8 @@
 import type { Format, LocatorType } from "../pipeline/ir.js";
 import type { Db } from "./sqlite.js";
 
-export type IngestStatus = "pending" | "processing" | "ready" | "failed";
+/** No code path writes the schema's 'pending' (its column default); every insert claims as 'processing'. */
+export type IngestStatus = "processing" | "ready" | "failed";
 
 export interface DocumentRow {
   id: string;
@@ -192,7 +193,13 @@ export function renewLease(db: Db, id: string): void {
 export function finalizeDocument(
   db: Db,
   id: string,
-  fields: { chunkCount: number; locatorCount: number; outlineJson: string },
+  fields: {
+    chunkCount: number;
+    locatorCount: number;
+    outlineJson: string;
+    /** Replaces the claim-time warning when given; only the parse knows what it skipped. */
+    ingestWarning?: string | null;
+  },
   supersede: readonly string[] = [],
 ): void {
   db.transaction(() => {
@@ -203,6 +210,9 @@ export function finalizeDocument(
               ingest_status = 'ready', error_message = NULL, updated_at = ?
         WHERE id = ?`,
     ).run(fields.chunkCount, fields.locatorCount, fields.outlineJson, now(), id);
+    if (fields.ingestWarning !== undefined) {
+      db.prepare("UPDATE documents SET ingest_warning = ? WHERE id = ?").run(fields.ingestWarning, id);
+    }
   })();
 }
 

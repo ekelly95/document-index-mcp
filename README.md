@@ -46,6 +46,7 @@ from inside a dependency, which is a miserable way to find out.
 ```bash
 git clone https://github.com/ekelly95/document-index-mcp.git
 cd document-index-mcp
+corepack enable   # provides the pnpm 11 that package.json pins
 pnpm install
 pnpm build
 ```
@@ -56,6 +57,10 @@ a symlink that lexically passes but physically escapes.
 
 Pick it before you ingest anything. `source_path` is stored relative to the root and there is no
 rebase command, so moving the root later silently stops every existing row resolving.
+
+The same holds file by file: the index is a snapshot. A source edited, moved or deleted after ingest
+keeps answering with the text it had, under the path it had, until it is ingested again (an edited
+file then replaces its old version). Nothing checks the files behind the listing yet.
 
 ### Register with Claude Desktop
 
@@ -135,10 +140,10 @@ the limit, so you know which to change.
 |---|---|---|---|
 | `.md` | `section` (`sec-N`, advancing at each H1/H2) | ATX headings | Block text is sliced from the source, never re-serialized |
 | `.txt` | `section` | Setext underlines, numbered sections, ALL-CAPS lines, named divisions | A flat outline may be correct rather than a failure |
-| `.pdf` | `page`, plus `printed_label` where the printed number differs | Embedded bookmarks refined by heading styles (size + font) | Tables are read as prose; running headers, page numbers and citation markers are dropped as furniture; scans and mojibake escalate to OCR, or are refused under `--ocr=off` |
-| `.docx` | `section` | Heading styles, resolved through the document's style sheet, so localized and custom heading styles count | Headers, footers, comments and tracked-change machinery are never read. Deletions cannot leak: only `w:t` is read, never `w:delText` |
-| `.epub` | — | — | Removed, not deferred. Recognised by content sniffing and refused by name, with the reason |
-| `.pptx` / `.ppt` | — | — | Removed. Run `scripts/convert-for-ingest.ps1` for a PDF plus a speaker-notes file, and ingest both |
+| `.pdf` | `page`, plus `printed_label` where the printed number differs | Embedded bookmarks (named destinations included) refined by heading styles (size + font). A bookmark that points partway down a page starts its section there; one that names only the page starts it at the top | Tables are read as prose; running headers, page numbers and citation markers are dropped as furniture; scans and mojibake go to OCR, or are refused under `--ocr=off` (see below). An image-only page inside an otherwise digital PDF is not OCR'd, but is named in `ingest_warning` |
+| `.docx` | `section` | Heading styles, resolved through the document's style sheet, so localized and custom heading styles count | Headers, footers, comments and tracked-change machinery are never read. Deletions cannot leak: only `w:t` is read, never `w:delText`, and moved text is read once, where it landed |
+| `.epub` | — | — | Removed, not deferred. Refused by extension, with the remedy: convert to PDF or Markdown |
+| `.pptx` / `.ppt` | — | — | Removed. Run `scripts/convert-for-ingest.ps1` (Windows, PowerPoint) for a PDF plus a speaker-notes file, and ingest both. Elsewhere, `soffice --headless --convert-to pdf` gives the slides at lower fidelity and without the notes |
 | `.html` | — | — | Recognised by content sniffing and refused with a reason |
 | `.doc` | — | — | Legacy binary Word: refused, pointing at `scripts/convert-for-ingest.ps1`, which converts it through Word itself |
 
@@ -146,10 +151,14 @@ Format is decided by content, not by file extension.
 
 ### Scanned PDFs
 
-A PDF whose sampled pages are essentially imagery — or whose text layer decodes to noise — is routed
-through in-process OCR (tesseract.js, WASM, nothing to install). The decision is re-made per page, so
-a scanned book's digitally typeset title page keeps its real text and only the scanned pages pay for
-recognition.
+A PDF whose sampled pages are essentially imagery — at most a quarter of them carrying text — or whose
+text layer decodes to noise is routed through in-process OCR (tesseract.js, WASM, nothing to
+install). Within an OCR'd document the decision is re-made per page, so a scanned book's digitally
+typeset title page keeps its real text and only the scanned pages pay for recognition.
+
+A mostly digital PDF with a few scanned pages (plates, inserts) stays on the fast path, and those
+pages are not recognised. They are not silent either: the document's `ingest_warning` names every
+page that yielded no text, as it does for an OCR'd page whose every line scored too low to keep.
 
 It is slow and visibly so: roughly 1–5 seconds per page per worker, making a 400-page scan tens of
 minutes. `get_document_outline` reports `chunk_count` rising against `locator_count` throughout.
@@ -172,7 +181,7 @@ The embedding model is English-only, so a multilingual library retrieves poorly.
 |---|---|
 | `search_document` | Hybrid BM25 + semantic search. Ranked snippets with locators, each with a similarity score, plus a `confidence` that says when the library probably does not cover the question. The usual starting point. |
 | `get_document_outline` | Heading tree with chunk ranges. Also lists the library, and reports ingest progress. |
-| `get_chunk_context` | The only tool that returns body text, hard-capped at 24,000 characters. |
+| `get_chunk_context` | The only tool that returns body text, hard-capped at 24,000 characters. A single chunk over the cap (possible only in an index built before October 2026's fixes) is cut and marked `truncated`. |
 | `ingest_document` | Index a file. Returns immediately; indexing continues in the background. |
 | `delete_document` | Drop a document from the index. Never touches the file on disk. |
 
@@ -183,6 +192,13 @@ from the hit or `document_id` + `seq` from the outline.
 
 Search never returns full document bodies. That is structural rather than conventional: the output
 schema for a search hit has no text field at all, so a refactor cannot quietly regress it.
+
+Everything the reading tools return beyond their own framing comes from your files: titles, section
+names, snippets, passages. Replies say so, each passage `get_chunk_context` returns is fenced so its
+end is unambiguous, and the tool descriptions tell the model to treat that text as content, not
+instructions. Like every MCP tool result, a `get_chunk_context` reply carries its text twice, once
+rendered in `content` and once in `structuredContent`. A client that forwards both to the model pays
+for the passage twice.
 
 Reference lists are recognised at ingest (a References heading, or citation-dense text) and left out
 of search by default, since a list of paper titles matches every question on its topic while
@@ -247,9 +263,11 @@ The suite covers the chunker's boundary law, the path jail, index agreement acro
 PDF probe refusals and real OCR over generated scan imagery, concurrent-ingest safety and lease
 recovery, hybrid fusion, and the five tools end to end over a real MCP client.
 
-Three things to know. **Never pipe the test run** — a `| tail` once masked a failure here. **One test
-skips on Windows**: the symlink-escape case in `paths.test.ts` needs Developer Mode or an elevated
-shell, and CI runs it on Linux. And there are **no binary test fixtures** — PDFs are hand-assembled at
+Three things to know. **Never pipe the test run** — a `| tail` once masked a failure here. **Four
+tests skip by default**: two need `DOCUMENT_INDEX_TEST_REAL_MODEL=1` (with
+`DOCUMENT_INDEX_MODEL_CACHE` set) — the real tokenizer's window and the confidence calibration — and
+CI runs them on one job; two symlink cases skip where a symlink cannot be created, which on Windows
+means without Developer Mode or an elevated shell, and CI runs them on Linux. And there are **no binary test fixtures** — PDFs are hand-assembled at
 test time, cross-reference table and all, and scanned pages are drawn onto a canvas and embedded as a
 JPEG XObject, so OCR is tested against genuine imagery without a blob in the repository.
 

@@ -11,6 +11,7 @@
       "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a",
       "source": "arXiv 1512.03385, Deep Residual Learning for Image Recognition",
       "url": "https://arxiv.org/pdf/1512.03385",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
       "licence": "arXiv non-exclusive licence",
       "tests": "Two-column reading order; the arXiv margin stamp that once outranked the paper title"
     },
@@ -20,6 +21,7 @@
       "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
       "source": "arXiv 1706.03762, Attention Is All You Need",
       "url": "https://arxiv.org/pdf/1706.03762",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
       "licence": "arXiv non-exclusive licence",
       "tests": "Tables in a single-column paper; figure captions as headings; the Google permission notice on page 1 read as a heading"
     },
@@ -28,7 +30,9 @@
       "bytes": 1346981,
       "sha256": "a52c79a866ec9cbe26a6fd2a2113f5e6dc048a93e259f2c72108a55986b34b3b",
       "source": "PLOS ONE, The miR-200 family is increased in dysplastic lesions in ulcerative colitis patients",
-      "url": "https://doi.org/10.1371/journal.pone.0173664",
+      "url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0173664&type=printable",
+      "landing_url": "https://doi.org/10.1371/journal.pone.0173664",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
       "url_evidence": "DOI read out of the PDF's own XMP metadata",
       "licence": "CC-BY",
       "tests": "Open-access journal furniture - sidebars, abbreviation footnotes, a two-line title"
@@ -38,8 +42,9 @@
       "bytes": 2475163,
       "sha256": "657d41475eb3a9a5e3e87a6c7c51ac1dfbe1af7566d1abff7bf7286e7e1c0e1b",
       "source": "The 9/11 Commission Report, US Government Publishing Office",
-      "url": null,
-      "url_note": "The PDF carries no readable identifier - its Info dictionary is compressed. Search govinfo.gov for the GPO edition and verify by sha256 before trusting a replacement.",
+      "url": "https://www.govinfo.gov/content/pkg/GPO-911REPORT/pdf/GPO-911REPORT.pdf",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
+      "url_evidence": "The GPO edition on govinfo.gov (package GPO-911REPORT)",
       "licence": "Public domain (US Government work)",
       "tests": "585 pages; 22 top-level embedded bookmarks composed with font-size tiers; the placeholder title 'Title (201-635.job)'"
     },
@@ -58,7 +63,9 @@
       "bytes": 18728103,
       "sha256": "35c9b9f7fc9bc2f71af6e34526339aca9a6f86a5685b7e684345881488f6fcea",
       "source": "A history of the mental growth of mankind in ancient times (Hittell), Internet Archive",
-      "url": "https://archive.org/details/historyofmentalg03hitt",
+      "url": "https://archive.org/download/historyofmentalg03hitt/historyofmentalg03hitt.pdf",
+      "landing_url": "https://archive.org/details/historyofmentalg03hitt",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
       "url_evidence": "Identifier read out of the PDF's own metadata (Creator: Digitized by the Internet Archive)",
       "licence": "Public domain",
       "tests": "A 408-page scan carrying an OCR text layer, so it takes the fast path rather than the OCR one - and its near-continuum of font sizes made almost every line a heading"
@@ -68,8 +75,9 @@
       "bytes": 67970,
       "sha256": "94d1e6bc3fcef399e69d49543fcabbf62ee9dad4873c1c0958a5d46cdf6654ea",
       "source": "sample-files.com",
-      "url": null,
-      "url_note": "Sample file; verify by sha256.",
+      "url": "https://sample-files.com/downloads/documents/docx/sample-files.com-large-document.docx",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
+      "url_evidence": "Published as \"large-document\" on sample-files.com/documents/docx/",
       "licence": "Licensed sample",
       "tests": "Word with actual heading styles and a generated contents page - 109 correctly nested outline nodes"
     },
@@ -78,8 +86,9 @@
       "bytes": 38293,
       "sha256": "1c675c67c6664e250b4b21a59a7b73f090d6d4e4626f151c55adbada9d79c6b1",
       "source": "sample-files.com",
-      "url": null,
-      "url_note": "Sample file; verify by sha256.",
+      "url": "https://sample-files.com/downloads/documents/docx/sample-files.com-template.docx",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
+      "url_evidence": "Published as \"template\" on sample-files.com/documents/docx/",
       "licence": "Licensed sample",
       "tests": "Content controls / form fields, which wrap paragraphs in w:sdt"
     },
@@ -88,8 +97,9 @@
       "bytes": 39134,
       "sha256": "56d880c6099dbf982d8a4ad1da71e482440171cb8a456a804bfa3c0010001076",
       "source": "sample-files.com",
-      "url": null,
-      "url_note": "Sample file; verify by sha256.",
+      "url": "https://sample-files.com/downloads/documents/docx/sample-files.com-tracked-changes.docx",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
+      "url_evidence": "Published as \"tracked-changes\" on sample-files.com/documents/docx/",
       "licence": "Licensed sample",
       "tests": "Insertions, deletions and reviewer comments - deleted strings must never reach the index"
     },
@@ -98,8 +108,9 @@
       "bytes": 39301,
       "sha256": "f11873de3cb3f1f2424806b21aab6e6c95e5a54bf05875a62fd7ac0420d33189",
       "source": "sample-files.com",
-      "url": null,
-      "url_note": "Sample file; verify by sha256.",
+      "url": "https://sample-files.com/downloads/documents/docx/sample-files.com-table-document.docx",
+      "url_verified": "2026-10-10: downloaded from url, byte-identical to sha256",
+      "url_evidence": "Published as \"table-document\" on sample-files.com/documents/docx/",
       "licence": "Licensed sample",
       "tests": "Merged cells and nested tables through gfmTable"
     }
