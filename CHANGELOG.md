@@ -8,7 +8,45 @@ changes.
 
 ## Unreleased
 
-### October 2026 audit
+### October 2026 code audit
+
+Fixes to chunking and PDF structure apply to documents indexed after them:
+run `pnpm reindex` to rebuild an existing index (titles are kept). The
+retrieval evaluation has not been re-run on these changes.
+
+- **A filtered search on a large library no longer errors.** Overfetch
+  escalation asked sqlite-vec for more than its 4,096-neighbour ceiling; the
+  vector leg is now clamped there.
+- **No chunk is unbounded, and the 24k read cap holds.** A unit with nothing to
+  split at — a minified line, a blob, one long table row — is cut by token
+  budget. An oversized chunk in an older index is cut on read and marked
+  `truncated`.
+- **A short subsection opener stays in its own section.** Fragment merging no
+  longer crosses section paths, so "### B" and its first sentence are not cited
+  under A.
+- **PDF bookmarks:** named destinations are resolved (LaTeX/hyperref files had
+  no bookmark trail), a positioned bookmark starts its section where it points
+  rather than at the top of the page, and a second section starting on the same
+  page is kept.
+- **Pages that yielded no text are named in `ingest_warning`:** image-only pages
+  in an otherwise digital PDF, and OCR'd pages whose every line scored too low.
+- **Document text is labelled as content.** Titles and section names render on
+  one line, passages are fenced, and the reading tools say the text is not
+  instructions.
+- **DOCX:** text inside a tracked move is indexed once, not twice.
+- **Smaller fixes:** snippets are held to 300 characters; `search_document`
+  names an unknown `document_id`; ingesting a byte-identical copy says the
+  document moved, and from where (`moved_from`); `.epub`/`.pptx`/`.ppt` refusals
+  name the remedy; `pnpm ingest` warns about unreadable folders and exits 2 when
+  no target exists; the outline reports progress in pages for a PDF; the unused
+  `pending` status is gone from the tool schemas.
+- **Tests** for the CLIs' target walk and reindex hand-over, format sniffing,
+  and, on the real-model job, the confidence calibration.
+- `pnpm audit` reports one moderate advisory (GHSA-hp3w-g68c-fv3c), in
+  `sprintf-js` ≤ 1.1.3 via `onnxruntime-node` › `global-agent` › `roarr`. A
+  patched 1.1.4 exists; no override has been added.
+
+### October 2026 retrieval audit
 
 Measured against a real library of eleven textbook PDFs; the before/after
 table is in [docs/roadmap.md](docs/roadmap.md).

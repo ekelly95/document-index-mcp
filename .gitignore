@@ -30,3 +30,6 @@ eval/results/
 # the only part that should ever be.
 corpus/docs/
 corpus/decks/
+
+# Claude Code per-machine settings: absolute personal paths, never shared.
+.claude/settings.local.json

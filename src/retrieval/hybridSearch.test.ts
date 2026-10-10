@@ -20,7 +20,7 @@ import { assessConfidence, CONFIDENT_SIMILARITY, hybridSearch, type Hit } from "
  *
  * None of it had any test coverage. `hybrid.test.ts` covers the three exported
  * pure helpers precisely because they can be reached without a database and a
- * 130MB model — which left the function those helpers exist to serve
+ * ~65 MB model — which left the function those helpers exist to serve
  * completely unasserted. A stub embedder makes it reachable.
  */
 

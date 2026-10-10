@@ -59,7 +59,7 @@ const outputSchema = z.object({
       lexical_match: z.boolean().describe("Full-text search matched the query's words in this passage"),
       snippet: z
         .string()
-        .describe("<=300 chars; query terms marked with « » when the match was lexical"),
+        .describe("At most 300 chars; query terms marked with « » when the match was lexical"),
     }),
   ),
   confidence: z
@@ -67,7 +67,8 @@ const outputSchema = z.object({
     .nullable()
     .describe(
       "'low' means even the best hit is a weak semantic match: the library probably does not " +
-        "cover this question, so do not treat the hits as an answer. Null in lexical mode.",
+        "cover this question, so do not treat the hits as an answer. Null in lexical mode, " +
+        "which has no similarity to judge by — except that no hits at all is always 'low'.",
     ),
   processing_documents: z
     .array(

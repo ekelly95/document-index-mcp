@@ -3,7 +3,7 @@ import { Embedder, EMBEDDING_DIM, type InitEmbedding } from "../embeddings/embed
 
 /**
  * A deterministic stand-in for the real model, so a test can exercise the whole
- * pipeline without a 130 MB download and a second of ONNX startup.
+ * pipeline without a ~65 MB download and a second of ONNX startup.
  *
  * The end-to-end suite was the only thing loading the real model, and it cost
  * eleven of the suite's twelve seconds. What those tests assert is mechanism —

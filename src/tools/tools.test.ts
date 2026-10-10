@@ -24,9 +24,9 @@ import { buildPdf, type PdfFixture } from "../testing/pdfFixture.js";
  *
  * `DOCUMENT_INDEX_TEST_REAL_MODEL=1` runs it against the real model instead.
  * CI does that on one job, and the release workflow always does, so the
- * download, the patched tar extract and ONNX loading stay covered.
+ * download, the SHA-256 check and ONNX loading stay covered.
  *
- * The model is ~130MB and cached in a stable temp directory so the real run
+ * The model is ~65 MB and cached in a stable temp directory so the real run
  * does not re-download it; DOCUMENT_INDEX_MODEL_CACHE overrides the location.
  */
 const MODEL_CACHE =

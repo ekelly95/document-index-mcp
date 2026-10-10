@@ -50,7 +50,7 @@ export interface ContextOptions {
    * Only for tests. `Embedder` already accepts an injectable `InitEmbedding` so
    * the retry path can be tested without a network, but that seam was
    * unreachable through here — `createContext` constructed its own — which is
-   * the whole reason the end-to-end suite loads the real 130MB ONNX model and
+   * the whole reason the end-to-end suite loads the real ~65 MB ONNX model and
    * `hybridSearch` had no direct tests at all.
    */
   embedder?: Embedder;

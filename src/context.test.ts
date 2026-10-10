@@ -49,7 +49,7 @@ afterEach(async () => {
 test("a supplied embedder is used instead of loading the real model", async () => {
   // The seam that makes a fast test tier possible at all. Embedder already
   // accepted an injectable init, but createContext built its own, so anything
-  // going through it pulled the 130MB ONNX model down.
+  // going through it pulled the ~65 MB ONNX model down.
   const vector = new Array<number>(EMBEDDING_DIM).fill(0.5);
   const stub = new Embedder(
     library,

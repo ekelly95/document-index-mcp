@@ -3,6 +3,33 @@
 What is built, what was cut, and what is still wrong. The phase numbers record the order things were
 promised in, not the order they landed.
 
+## October 2026: a code audit
+
+A second pass, this time over the code rather than retrieval quality. Closed, each pinned by a test:
+a filtered search on a library of a few thousand chunks threw instead of answering (sqlite-vec refuses
+a KNN `k` above 4,096, and escalation doubled past it); one unsplittable run — a minified line, a
+blob, a long table row — became an unbounded chunk that `get_chunk_context` returned whole, past its
+cap; a short subsection opener merged back into the previous section and was cited under it; PDF
+bookmarks ignored named destinations (every LaTeX file), re-based at the top of the page whatever the
+destination said, and kept only one per page; image-only pages in a digital PDF, and OCR pages whose
+every line scored too low, vanished without a warning; document text went into tool replies
+unlabelled; and text in a DOCX tracked move was indexed twice.
+
+Still open from it:
+
+- **Per-file drift.** An edited, moved or deleted source keeps serving its old text until re-ingested,
+  and nothing says so. The fix is a stat-only `source_status` (present / changed / missing, against a
+  size and mtime stored at ingest) or a `verify_library` tool — never automatic deletion. It needs a
+  schema bump, so it waits for the next one.
+- **The tokenizer.** `@anush008/tokenizers@0.0.0` is archived upstream, and it is the dependency that
+  limits installs to x64 Windows, Linux and macOS. The way out is `@huggingface/tokenizers`, or
+  fastembed's own tokenizer once it exposes one; either has to reproduce the same token counts, which
+  `fitToBudget` and the real-model test check.
+- **Image-only pages are reported, not recognised.** A digital PDF with scanned plates gets an
+  `ingest_warning` naming them; OCR'ing just those pages on the fast path is the obvious next step.
+- **Mid-page bookmarks need a position.** A destination that names only its page (`/Fit`) still
+  re-bases at the top, because there is nothing better to go on.
+
 ## October 2026: an audit against a real library
 
 Everything above was measured on a stress corpus. Run against the library actually in use — eleven
@@ -92,7 +119,7 @@ already exists and is called only by the CLIs) and a `search_fts` rebuild comman
 answered by `pnpm reindex` (October 2026).
 
 **The fast/real-model test split is done.** The end-to-end file was the only thing loading the
-130MB ONNX model, and at 11.1 of the suite's 12 seconds it was most of what a test run cost — paid
+~65 MB ONNX model, and at 11.1 of the suite's 12 seconds it was most of what a test run cost — paid
 by everyone, on every run, to assert things that are not claims about embedding quality. It now uses
 a hashing bag-of-words stub (`src/testing/stubEmbedder.ts`), which is deliberately not noise: real
 word-overlap similarity keeps the semantic leg sane, so the fused ordering stays stable and the
