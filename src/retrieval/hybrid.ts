@@ -64,6 +64,13 @@ const REFERENCE_EXCLUSION_OVERFETCH = 4;
  */
 const MAX_ESCALATIONS = 3;
 
+/**
+ * sqlite-vec refuses a KNN query with k above this ("k value in knn query too
+ * large"). Escalation once doubled past it on a large library and turned a
+ * filtered search into an error; a leg at the ceiling counts as exhausted.
+ */
+const VEC0_MAX_K = 4096;
+
 export interface SearchFilter {
   kind?: ChunkKind;
   sectionPrefix?: string;
@@ -289,13 +296,15 @@ export async function hybridSearch(
   const excludesReferences = q.filter?.kind === undefined;
 
   let lexicalLimit = q.k * (lexicalPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
-  let semanticLimit =
+  let semanticLimit = Math.min(
+    VEC0_MAX_K,
     q.k *
-    (selective
-      ? POST_FILTER_OVERFETCH
-      : excludesReferences
-        ? REFERENCE_EXCLUSION_OVERFETCH
-        : PUSHED_DOWN_OVERFETCH);
+      (selective
+        ? POST_FILTER_OVERFETCH
+        : excludesReferences
+          ? REFERENCE_EXCLUSION_OVERFETCH
+          : PUSHED_DOWN_OVERFETCH),
+  );
   const semanticPostFiltered = selective || excludesReferences;
 
   // Embedded once, not once per escalation round.
@@ -315,11 +324,12 @@ export async function hybridSearch(
     // that returned less is exhausted, and asking again would re-scan the same
     // corpus for the same answer.
     const lexicalSaturated = lexicalPostFiltered && lexical.ids.length === lexicalLimit;
-    const semanticSaturated = semanticPostFiltered && semantic.length === semanticLimit;
+    const semanticSaturated =
+      semanticPostFiltered && semantic.length === semanticLimit && semanticLimit < VEC0_MAX_K;
     if (!lexicalSaturated && !semanticSaturated) break;
 
     if (lexicalSaturated) lexicalLimit *= 2;
-    if (semanticSaturated) semanticLimit *= 2;
+    if (semanticSaturated) semanticLimit = Math.min(semanticLimit * 2, VEC0_MAX_K);
   }
 
   if (vector) {
@@ -343,7 +353,7 @@ export async function hybridSearch(
  * Weighted Reciprocal Rank Fusion over the two legs' candidate lists.
  *
  * Exported, like the other pure parts of this module, so the ranking property
- * can be pinned in a test without standing up a database and a 130MB model.
+ * can be pinned in a test without standing up a database and the embedding model.
  * Returns `[chunkRowid, score]` pairs, best first.
  */
 export function fuseRankings(
