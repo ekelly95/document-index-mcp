@@ -170,8 +170,17 @@ async function* mergeFragments(
 function canMerge(a: DraftChunk, b: DraftChunk, max: number): boolean {
   if (a.locator.value !== b.locator.value) return false;
   if (ISOLATED_KINDS.has(a.kind) || ISOLATED_KINDS.has(b.kind)) return false;
+  // Never across sections, or a short subsection opener ("### B" and one
+  // sentence) folds back into the previous section and is cited under it. A
+  // heading-only fragment is the exception: it joins the body it introduces,
+  // forward, and takes that body's path.
+  if (a.kind !== "heading" && !samePath(a.sectionPath, b.sectionPath)) return false;
   if (a.tokenCount >= MIN_CHUNK_TOKENS && b.tokenCount >= MIN_CHUNK_TOKENS) return false;
   return a.tokenCount + b.tokenCount <= max;
+}
+
+function samePath(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((segment, i) => segment === b[i]);
 }
 
 function merge(a: DraftChunk, b: DraftChunk): DraftChunk {

@@ -353,3 +353,26 @@ test("a fragment folds into its neighbour on the same page, never across pages o
   );
   assert.ok(out[4]!.text.endsWith("(figure label)"));
 });
+
+test("a short subsection opener stays in its own section, not the one before", async () => {
+  // "### B" and one sentence is under the fragment threshold. It used to fold
+  // back into A's last chunk and take A's path, so B was cited as A and its
+  // outline span started a chunk late.
+  const opener = [
+    block("paragraph", prose("A", 6), 1, ["A"]),
+    block("heading", "### B", 1, ["A"], 3),
+    block("paragraph", "B opens briefly.", 1, ["A", "B"]),
+  ];
+
+  for (const rest of [
+    [block("paragraph", prose("B", 6), 1, ["A", "B"])], // B's body follows on the page
+    [block("paragraph", prose("C", 6), 2, ["A", "B"])], // the page ends first
+  ]) {
+    const chunks = await collect([...opener, ...rest]);
+    const underA = chunks.filter((c) => c.sectionPath.join("›") === "A");
+    assert.ok(underA.every((c) => !c.text.includes("B opens")), "B's opener was filed under A");
+    const withHeading = chunks.find((c) => c.text.includes("### B"))!;
+    assert.deepEqual(withHeading.sectionPath, ["A", "B"]);
+    assert.ok(withHeading.text.includes("B opens briefly."));
+  }
+});
