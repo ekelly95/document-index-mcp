@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import Database from "better-sqlite3";
 import { loadConfig, parseFlags } from "../config.js";
 import { createContext } from "../context.js";
 import { indexCounts } from "../db/chunksRepo.js";
@@ -7,6 +6,7 @@ import { acquireIndexLock } from "../db/processLock.js";
 import { beginIngest } from "../ingest/runner.js";
 import { disposeOcrPool } from "../pipeline/parsers/ocrPool.js";
 import { describeError, installProcessHandlers } from "../log.js";
+import { moveAside, readOldIndex } from "./oldIndex.js";
 
 /**
  * Rebuild an index from the library, keeping every document's title.
@@ -20,41 +20,6 @@ import { describeError, installProcessHandlers } from "../log.js";
  * `<db>.v<version>.bak` (with its -wal and -shm); with it, the old index is
  * only read and the new one is built at --db.
  */
-
-interface OldDocument {
-  title: string;
-  source_path: string;
-}
-
-/** Titles and paths from any version of the index, opened read-only. */
-function readOldIndex(file: string): { version: string; documents: OldDocument[] } {
-  const db = new Database(file, { readonly: true, fileMustExist: true });
-  try {
-    const version =
-      (db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined)
-        ?.value ?? "unknown";
-    // One row per path, preferring the finished version of a file.
-    const documents = db
-      .prepare(
-        `SELECT title, source_path FROM documents
-          ORDER BY source_path, CASE ingest_status WHEN 'ready' THEN 0 ELSE 1 END`,
-      )
-      .all() as OldDocument[];
-    const seen = new Set<string>();
-    return { version, documents: documents.filter((d) => !seen.has(d.source_path) && seen.add(d.source_path)) };
-  } finally {
-    db.close();
-  }
-}
-
-function moveAside(dbPath: string, version: string): string {
-  let target = `${dbPath}.v${version}.bak`;
-  if (fs.existsSync(target)) target = `${dbPath}.v${version}.${Date.now()}.bak`;
-  for (const suffix of ["", "-wal", "-shm"]) {
-    if (fs.existsSync(dbPath + suffix)) fs.renameSync(dbPath + suffix, target + suffix);
-  }
-  return target;
-}
 
 async function main(): Promise<void> {
   installProcessHandlers();

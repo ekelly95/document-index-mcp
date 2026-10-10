@@ -14,6 +14,7 @@ import {
   type InitEmbedding,
 } from "./embedder.js";
 import { fitToBudget, type DraftChunk } from "../pipeline/chunker.js";
+import { CONFIDENT_SIMILARITY } from "../retrieval/hybrid.js";
 
 /**
  * Init downloads the model on first run, so it is the one call here that
@@ -192,4 +193,35 @@ test("with the real tokenizer, fitted chunks never exceed the model window", {
     assert.ok((await count(input)) <= 400, `fitted input is ${await count(input)} tokens`);
   }
   assert.ok(parts > 1, "the table was not split");
+});
+
+test("the confidence threshold still separates an on-topic question from an off-topic one", {
+  skip: process.env["DOCUMENT_INDEX_TEST_REAL_MODEL"] !== "1" || !process.env["DOCUMENT_INDEX_MODEL_CACHE"],
+}, async () => {
+  // CONFIDENT_SIMILARITY was measured, not derived. A change to the model, the
+  // tokenizer or what goes into the embedded text can move every similarity
+  // at once, and nothing else would notice until "low confidence" stopped
+  // meaning anything. One checked-in pair, either side of the line.
+  const embedder = new Embedder(process.env["DOCUMENT_INDEX_MODEL_CACHE"]!);
+  const [passage] = await embedder.embedPassages([
+    {
+      documentTitle: "Coastal Oceanography",
+      sectionPath: ["Tides", "Resonant Basins"],
+      overlapPrefix: null,
+      text:
+        "The Bay of Fundy has the largest tidal range in the world, up to sixteen metres. " +
+        "Its natural sloshing period is close to the twelve-and-a-half-hour period of the " +
+        "lunar tide, so each tide reinforces the basin's own oscillation. This resonance, " +
+        "together with the funnel shape of the bay, amplifies the incoming tide.",
+    },
+  ]);
+  const similarity = async (query: string) => {
+    const q = await embedder.embedQuery(query);
+    return q.reduce((s, x, i) => s + x * passage![i]!, 0);
+  };
+
+  const onTopic = await similarity("Why are the tides in the Bay of Fundy so large?");
+  const offTopic = await similarity("How long should sourdough bread proof before baking?");
+  assert.ok(onTopic >= CONFIDENT_SIMILARITY, `on-topic similarity ${onTopic.toFixed(3)} fell below the threshold`);
+  assert.ok(offTopic < CONFIDENT_SIMILARITY, `off-topic similarity ${offTopic.toFixed(3)} reached the threshold`);
 });
