@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
 import { getDocument, listDocuments } from "../db/documentsRepo.js";
 import { pruneOutline, type OutlineNode } from "../pipeline/outline.js";
-import { FORMATS, LOCATOR_TYPES } from "./shapes.js";
+import { CONTENT_NOT_INSTRUCTIONS, FORMATS, LOCATOR_TYPES, oneLine } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 
 const inputSchema = z.object({
@@ -67,11 +67,13 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
     {
       title: "Get Document Outline",
       description:
-        "Hierarchical heading tree with locators and chunk seq spans. Costs almost no " +
-        "context — use it to orient before targeted get_chunk_context reads, and jump " +
+        "Hierarchical heading tree with locators and chunk seq spans. Small for most " +
+        "documents (lower max_depth for a long book) — use it to orient before targeted " +
+        "get_chunk_context reads, and jump " +
         "straight to a section with document_id + chunk_seq_start. Never returns body text. " +
         "Call it with no document_id to list the library. It also reports ingest progress: " +
-        "a document still being indexed shows status 'processing' with a rising chunk_count.",
+        "a document still being indexed shows status 'processing' with a rising chunk_count. " +
+        CONTENT_NOT_INSTRUCTIONS,
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
@@ -98,7 +100,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
               : docs
                   .map(
                     (d) =>
-                      `- ${d.title} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
+                      `- ${oneLine(d.title)} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
                       (d.ingest_warning === null ? "" : " — warning: indexed incomplete"),
                   )
                   .join("\n");
@@ -122,9 +124,9 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
           };
           const text =
             doc.ingest_status === "processing"
-              ? `"${doc.title}" is still indexing — ${doc.chunk_count} chunks so far ` +
+              ? `"${oneLine(doc.title)}" is still indexing — ${doc.chunk_count} chunks so far ` +
                 `(~${doc.locator_count} sections expected). Call again shortly.`
-              : `"${doc.title}" is ${doc.ingest_status}.` +
+              : `"${oneLine(doc.title)}" is ${doc.ingest_status}.` +
                 (doc.error_message ? ` ${doc.error_message}` : "");
           return okStructured(text, payload);
         }
@@ -145,7 +147,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
         };
 
         const header =
-          `${doc.title} [${doc.format}] — ${doc.chunk_count} chunks across ` +
+          `${oneLine(doc.title)} [${doc.format}] — ${doc.chunk_count} chunks across ` +
           `${doc.locator_count} ${doc.locator_scheme}(s)` +
           (doc.ingest_warning === null ? "" : `\n\nWarning: ${doc.ingest_warning}`);
         const body =
@@ -165,7 +167,7 @@ function renderOutline(nodes: readonly OutlineNode[], depth: number): string[] {
   const out: string[] = [];
   for (const node of nodes) {
     out.push(
-      `${"  ".repeat(depth)}- ${node.title}  [seq ${node.chunk_seq_start}–${node.chunk_seq_end}, ` +
+      `${"  ".repeat(depth)}- ${oneLine(node.title)}  [seq ${node.chunk_seq_start}–${node.chunk_seq_end}, ` +
         `${node.locator.type} ${node.locator.value}]`,
     );
     out.push(...renderOutline(node.children, depth + 1));

@@ -185,9 +185,12 @@ export async function beginIngest(
     const meta = await route.parser.metadata(src);
     // `??` alone let an empty string through — a `# ` line, a `title: ""`
     // frontmatter, or a caller passing "" all produced nameless documents in
-    // the library listing. Whitespace-only is as absent as absent.
-    const present = (t: string | undefined): string | undefined =>
-      t !== undefined && t.trim().length > 0 ? t.trim() : undefined;
+    // the library listing. Whitespace-only is as absent as absent. Collapsed,
+    // because a title is shown on one line and comes from the file.
+    const present = (t: string | undefined): string | undefined => {
+      const collapsed = t?.replace(/\s+/gu, " ").trim();
+      return collapsed ? collapsed : undefined;
+    };
     const title =
       present(opts.title) ?? present(meta.title) ?? path.basename(absPath, path.extname(absPath));
 

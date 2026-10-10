@@ -3,7 +3,15 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
 import { listProcessing } from "../db/documentsRepo.js";
 import { assessConfidence, hybridSearch } from "../retrieval/hybrid.js";
-import { CHUNK_KINDS, ChunkRefShape, describeLocation, toChunkRef } from "./shapes.js";
+import {
+  CHUNK_KINDS,
+  CONTENT_NOT_INSTRUCTIONS,
+  ChunkRefShape,
+  describeLocation,
+  oneLine,
+  QUOTED_CONTENT_NOTE,
+  toChunkRef,
+} from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 
 const inputSchema = z.object({
@@ -84,7 +92,8 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         "starting point. It never returns full text — follow a hit with get_chunk_context " +
         "using its chunk_id to read. Check `confidence`: 'low' means the library probably " +
         "does not cover the question. Reference lists are left out unless filter.kind is " +
-        "'references'.",
+        "'references'. " +
+        CONTENT_NOT_INSTRUCTIONS,
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
@@ -159,7 +168,7 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
               processing
                 .map(
                   (d) =>
-                    `  - "${d.title}" (${d.chunk_count} chunks so far, ~${d.locator_count} ${d.locator_scheme}s expected) — ${d.id}`,
+                    `  - "${oneLine(d.title)}" (${d.chunk_count} chunks so far, ~${d.locator_count} ${d.locator_scheme}s expected) — ${d.id}`,
                 )
                 .join("\n");
 
@@ -174,16 +183,19 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
 
         const lines = payload.hits.map(
           (h, i) =>
-            `${i + 1}. ${h.document_title} — ${describeLocation(h)}` +
+            `${i + 1}. ${oneLine(h.document_title)} — ${describeLocation(h)}` +
             (h.similarity === null ? "" : ` (similarity ${h.similarity.toFixed(2)})`) +
-            `\n   ${h.snippet}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
+            `\n   ${oneLine(h.snippet)}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
         );
         const lead =
           payload.confidence === "low"
             ? `Low confidence: no passage is a strong match, so the library probably does not ` +
               `cover "${args.query}". These are the nearest ${payload.hits.length}, not an answer.`
             : `${payload.hits.length} hit(s). Read one with get_chunk_context.`;
-        return okStructured(`${lead}\n\n${lines.join("\n\n")}${caveat}`, payload);
+        return okStructured(
+          `${lead}\n${QUOTED_CONTENT_NOTE}\n\n${lines.join("\n\n")}${caveat}`,
+          payload,
+        );
       } catch (err) {
         return fail(`search_document failed: ${describeError(err)}`);
       }

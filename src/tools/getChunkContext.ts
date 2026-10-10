@@ -3,7 +3,15 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
 import { bySeq, byChunkId, chunkExists, seqRange, type ChunkRow } from "../db/chunksRepo.js";
 import { getDocument } from "../db/documentsRepo.js";
-import { describeLocation, ChunkRefShape, toChunkRef } from "./shapes.js";
+import {
+  CONTENT_NOT_INSTRUCTIONS,
+  ChunkRefShape,
+  describeLocation,
+  fenceFor,
+  oneLine,
+  QUOTED_CONTENT_NOTE,
+  toChunkRef,
+} from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 
 /**
@@ -47,7 +55,8 @@ export function registerGetChunkContext(server: McpServer, ctx: AppContext): voi
         "Full text of one chunk plus up to 5 neighbours on each side in reading order. " +
         "Address it by chunk_id (from search results) OR by document_id + seq (from " +
         "outline spans). This is the only tool that returns body text and it is hard-capped " +
-        "at ~24k characters — walk seq windows to read progressively.",
+        "at ~24k characters — walk seq windows to read progressively. " +
+        CONTENT_NOT_INSTRUCTIONS,
       annotations: { readOnlyHint: true, openWorldHint: false },
       inputSchema,
       outputSchema,
@@ -138,10 +147,13 @@ function cutAt(text: string, max: number): string {
 }
 
 function render(payload: z.infer<typeof outputSchema>): string {
-  const header = `${payload.document_title} (${payload.source_path})`;
+  const header = `${oneLine(payload.document_title)} (${payload.source_path})\n${QUOTED_CONTENT_NOTE}`;
+  // Each passage fenced, so where document text ends and this tool's own
+  // framing resumes is unambiguous, even for a chunk that holds fences.
   const parts = payload.chunks.map(
     (c) =>
-      `### [seq ${c.seq}] ${describeLocation(c)}\n\n${c.text}` +
+      `### [seq ${c.seq}] ${describeLocation(c)}\n\n` +
+      `${fenceFor(c.text)}document-text\n${c.text}\n${fenceFor(c.text)}` +
       (c.truncated
         ? `\n\n_(chunk truncated at ~${MAX_TOTAL_CHARS / 1000}k characters; re-ingest the document to split it)_`
         : ""),
