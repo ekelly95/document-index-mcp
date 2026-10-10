@@ -170,12 +170,15 @@ async function* mergeFragments(
 function canMerge(a: DraftChunk, b: DraftChunk, max: number): boolean {
   if (a.locator.value !== b.locator.value) return false;
   if (ISOLATED_KINDS.has(a.kind) || ISOLATED_KINDS.has(b.kind)) return false;
-  // Never across sections, or a short subsection opener ("### B" and one
-  // sentence) folds back into the previous section and is cited under it. A
-  // heading-only fragment is the exception: it joins the body it introduces,
-  // forward, and takes that body's path.
-  if (a.kind !== "heading" && !samePath(a.sectionPath, b.sectionPath)) return false;
   if (a.tokenCount >= MIN_CHUNK_TOKENS && b.tokenCount >= MIN_CHUNK_TOKENS) return false;
+  // Across sections, only forward: a fragment (a cover line, a heading) may
+  // join the section that follows it and take that section's path. Backward,
+  // a short subsection opener ("### B" and one sentence) folded into the
+  // previous section and was cited under it. Refusing forward merges too left
+  // the fragment standing alone as the hub chunk this pass exists to remove.
+  if (!samePath(a.sectionPath, b.sectionPath) && a.kind !== "heading" && a.tokenCount >= MIN_CHUNK_TOKENS) {
+    return false;
+  }
   return a.tokenCount + b.tokenCount <= max;
 }
 
@@ -189,7 +192,9 @@ function merge(a: DraftChunk, b: DraftChunk): DraftChunk {
     // A heading-only fragment joins the body it introduces and takes its path.
     kind: a.kind === b.kind ? a.kind : a.kind === "heading" ? b.kind : "text",
     locator: a.locator,
-    sectionPath: a.kind === "heading" || a.tokenCount < b.tokenCount ? b.sectionPath : a.sectionPath,
+    // Within a section the paths are equal; across one, canMerge allows only
+    // a forward merge, which files the result under the section that follows.
+    sectionPath: b.sectionPath,
     bbox: unionBBox([a.bbox, b.bbox]),
     text,
     overlapPrefix: a.overlapPrefix,
@@ -330,6 +335,15 @@ async function* packBlocks(
       buf = [];
       bufTokens = 0;
       continue;
+    }
+
+    // A section can change with no heading block to mark it: a PDF bookmark
+    // re-bases the trail at a line style detection did not take for a
+    // heading. Packed together, the two sections' text was filed under the
+    // second one's path.
+    if (block.kind !== "heading") {
+      const body = buf.findLast((b) => b.kind !== "heading");
+      if (body && !samePath(body.sectionPath, block.sectionPath)) yield* drain(false);
     }
 
     if (bufTokens > 0 && bufTokens + blockTokens > max) {

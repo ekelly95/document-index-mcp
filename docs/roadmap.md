@@ -15,6 +15,17 @@ destination said, and kept only one per page; image-only pages in a digital PDF,
 every line scored too low, vanished without a warning; document text went into tool replies
 unlabelled; and text in a DOCX tracked move was indexed twice.
 
+The evaluation earned its keep here. The first run of these fixes scored below `main` (hybrid R@1
+53% to 51%, MRR 0.616 to 0.603) on two questions, and both were chunker bugs the new bookmark handling
+exposed. "Attention Is All You Need" has hyperref bookmarks, which were ignored before; resolved,
+its 3.2 bookmark changed the section at a line style detection had not called a heading, and with no
+heading block to break on, 3.1's Decoder paragraph was packed into a chunk filed under 3.2. And the
+subsection-opener fix had refused merges across sections in both directions, leaving the 9/11
+report's cover line as a six-token chunk on its own. With the chunker breaking on any section change
+and refusing only backward merges, hybrid scored R@1 55%, R@3 67%, R@5 75%, MRR 0.632 — above `main`
+on every figure — over a corpus rebuilt from public sources (nine of ten files byte-identical to the
+manifest; the PML book, used by no question, not refetched).
+
 Still open from it:
 
 - **Per-file drift.** An edited, moved or deleted source keeps serving its old text until re-ingested,

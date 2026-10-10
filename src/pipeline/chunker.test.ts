@@ -376,3 +376,33 @@ test("a short subsection opener stays in its own section, not the one before", a
     assert.ok(withHeading.text.includes("B opens briefly."));
   }
 });
+
+test("a section change with no heading block still starts a new chunk", async () => {
+  // Measured on "Attention Is All You Need": its 3.2 bookmark re-bases the
+  // trail at a line style detection did not call a heading, so the Decoder
+  // paragraph of 3.1 and the opening of 3.2 were packed together and the
+  // whole chunk was cited as 3.2.
+  const chunks = await collect([
+    block("paragraph", prose("Decoder", 3), 3, ["Model", "Stacks"]),
+    block("paragraph", "3.2 Attention", 3, ["Model", "Attention"]),
+    block("paragraph", prose("Attention", 2), 3, ["Model", "Attention"]),
+  ]);
+  const decoder = chunks.find((c) => c.text.includes("Decoder sentence 0"))!;
+  assert.deepEqual(decoder.sectionPath, ["Model", "Stacks"]);
+  assert.ok(!decoder.text.includes("3.2 Attention"), "3.2's opening was packed into 3.1");
+  const attention = chunks.find((c) => c.text.includes("3.2 Attention"))!;
+  assert.deepEqual(attention.sectionPath, ["Model", "Attention"]);
+});
+
+test("a fragment before a section folds forward into it rather than standing alone", async () => {
+  // The 9/11 report's title page: a cover line with no section, then a
+  // detected heading opening the next. Refused, the cover line became a
+  // six-token chunk of its own — the hub fragment merging exists to remove.
+  const chunks = await collect([
+    block("paragraph", "THE 9/11 COMMISSION REPORT", 3, []),
+    block("heading", "Final Report of the Commission", 3, [], 1),
+    block("paragraph", prose("Sale", 2), 3, ["Final Report of the Commission"]),
+  ]);
+  assert.equal(chunks.length, 1, `got ${chunks.map((c) => JSON.stringify(c.text.slice(0, 30))).join(", ")}`);
+  assert.deepEqual(chunks[0]!.sectionPath, ["Final Report of the Commission"]);
+});

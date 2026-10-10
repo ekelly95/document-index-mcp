@@ -11,8 +11,21 @@ changes.
 ### October 2026 code audit
 
 Fixes to chunking and PDF structure apply to documents indexed after them:
-run `pnpm reindex` to rebuild an existing index (titles are kept). The
-retrieval evaluation has not been re-run on these changes.
+run `pnpm reindex` to rebuild an existing index (titles are kept).
+
+Evaluated against the stress corpus, rebuilt from public sources (nine of
+ten files byte-identical to the manifest; the PML book, which no question
+uses, was not refetched), `main` against this release on the same machine:
+
+| hybrid | R@1 | R@3 | R@5 | MRR |
+|---|---:|---:|---:|---:|
+| before | 53% | 65% | 73% | 0.616 |
+| after | 55% | 67% | 75% | 0.632 |
+
+Hybrid no longer scores below its own semantic leg at rank 3. The first run
+of these changes scored *lower* (R@1 51%, MRR 0.603), and the two questions
+behind that found two chunker bugs, fixed before release — see the
+subsection-opener entry.
 
 - **A filtered search on a large library no longer errors.** Overfetch
   escalation asked sqlite-vec for more than its 4,096-neighbour ceiling; the
@@ -21,9 +34,13 @@ retrieval evaluation has not been re-run on these changes.
   split at — a minified line, a blob, one long table row — is cut by token
   budget. An oversized chunk in an older index is cut on read and marked
   `truncated`.
-- **A short subsection opener stays in its own section.** Fragment merging no
-  longer crosses section paths, so "### B" and its first sentence are not cited
-  under A.
+- **A short subsection opener stays in its own section.** A fragment no longer
+  merges backward across a section boundary, so "### B" and its first sentence
+  are not cited under A; it may still fold forward into the section that
+  follows, so a cover line is not left as a chunk of its own. And a section
+  change with no heading block — a PDF bookmark at a line style detection
+  missed — now starts a new chunk, where two sections' text used to be packed
+  together under the second one's path.
 - **PDF bookmarks:** named destinations are resolved (LaTeX/hyperref files had
   no bookmark trail), a positioned bookmark starts its section where it points
   rather than at the top of the page, and a second section starting on the same
