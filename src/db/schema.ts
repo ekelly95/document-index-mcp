@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS documents (
   ingest_status   TEXT NOT NULL DEFAULT 'pending'
                     CHECK (ingest_status IN ('pending','processing','ready','failed')),
   error_message   TEXT,
-  ingest_warning  TEXT,                             -- set at ingest when a parser knows it skipped real content; survives markReady. No parser sets it today (see ir.ts)
+  ingest_warning  TEXT,                             -- content known skipped: pages that yielded no text (ParseReport, ir.ts), set when the document is finalised
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );

@@ -660,3 +660,21 @@ test("a chapter and its first section at one spot do not nest the chapter headin
   );
   assert.equal(trailsOf(blocks).get("Chapter prose."), "Chapter 1");
 });
+
+test("an image-only page inside a text PDF is reported, a blank one is not", async () => {
+  // Three text pages pass the probe easily, so the plate on page 2 used to
+  // vanish from the index without a trace.
+  const src = await write("plate.pdf", {
+    pages: [
+      { lines: [{ text: "Chapter one opens with ordinary prose.", x: 72, y: 700, size: 11 }] },
+      { lines: [], imageOnly: true },
+      { lines: [] },
+      { lines: [{ text: "Chapter two carries on after the plate.", x: 72, y: 700, size: 11 }] },
+    ],
+  });
+  const parser = new PdfFastParser();
+  for await (const _ of parser.parse(src)) {
+    // drain
+  }
+  assert.deepEqual(parser.report().pagesWithoutText, [{ page: 2, reason: "image-only" }]);
+});

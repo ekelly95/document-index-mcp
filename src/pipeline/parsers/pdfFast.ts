@@ -4,11 +4,14 @@ import type {
   DocumentMetadata,
   DocumentParser,
   DocumentSource,
+  PageWithoutText,
+  ParseReport,
 } from "../ir.js";
 import {
   assembleLines,
   isPageNumberLine,
   loadPdf,
+  paintsImage,
   pdfMetadata,
   type LoadedPdf,
   type PdfLine,
@@ -70,6 +73,12 @@ function namesSameSection(heading: string, current: string): boolean {
 }
 
 export class PdfFastParser implements DocumentParser {
+  private readonly pagesWithoutText: PageWithoutText[] = [];
+
+  report(): ParseReport {
+    return { pagesWithoutText: [...this.pagesWithoutText] };
+  }
+
   async *parse(src: DocumentSource): AsyncIterable<DocBlock> {
     // Not closed here: the source owns the pdfjs document and disposes it
     // when the ingest ends. The probe and the metadata pass share this exact
@@ -101,6 +110,12 @@ export class PdfFastParser implements DocumentParser {
           !isPageNumberLine(line.text) &&
           !isCitationMarkerLine(line.text),
       );
+
+      // A scanned plate in a digital book: the probe passed the document,
+      // and this page would otherwise vanish from the index without a word.
+      if (lines.length === 0 && (await paintsImage(page))) {
+        this.pagesWithoutText.push({ page: pageNumber, reason: "image-only" });
+      }
 
       const starts = trailByPage.get(pageNumber - 1) ?? [];
       let nextStart = 0;

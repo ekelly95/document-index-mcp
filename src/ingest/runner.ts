@@ -25,7 +25,7 @@ import { OutlineBuilder } from "../pipeline/outline.js";
 import { markReferences } from "../pipeline/references.js";
 import { routeDocument, type Route } from "../pipeline/router.js";
 import { UnsupportedFormatError } from "../pipeline/ir.js";
-import type { DocumentMetadata, DocumentSource, Format } from "../pipeline/ir.js";
+import type { DocumentMetadata, DocumentSource, Format, PageWithoutText } from "../pipeline/ir.js";
 import { openSource } from "../pipeline/source.js";
 import { assertRealPathInside, libraryRelative, safeResolve } from "../security/paths.js";
 import { withDocumentLock } from "../security/locks.js";
@@ -491,10 +491,19 @@ async function indexDocument(
     );
   }
 
+  const totalLocators = Math.max(meta.locatorCount, locators.size);
+  const skipped = describePagesWithoutText(
+    route.parser.report?.().pagesWithoutText ?? [],
+    totalLocators,
+  );
+  const warnings = [meta.warning, skipped].filter((w): w is string => Boolean(w));
+  if (skipped) log.info(`[${documentId}] ${skipped}`);
+
   finalizeDocument(
     ctx.db,
     documentId,
     {
+      ingestWarning: warnings.length > 0 ? warnings.join(" ") : null,
       chunkCount: seq,
       // The larger of the two, because they measure different things and each
       // is right about something. The parser's count is the document's true
@@ -503,7 +512,7 @@ async function indexDocument(
       // alone would report a shorter book than exists and could talk a caller
       // into a page_range that stops before the end. `locators.size` covers
       // the other direction, where a parser could not know the count ahead.
-      locatorCount: Math.max(meta.locatorCount, locators.size),
+      locatorCount: totalLocators,
       outlineJson: JSON.stringify(outline.build()),
     },
     // Only here, in the same transaction that flips this document to 'ready',
@@ -512,4 +521,52 @@ async function indexDocument(
   );
 
   return seq;
+}
+
+/** Pages listed per reason before the rest are summarised as a count. */
+const MAX_LISTED_PAGES = 20;
+
+const PAGE_REASONS: Record<PageWithoutText["reason"], string> = {
+  "image-only": "image only, no text layer",
+  "ocr-low-confidence": "OCR confidence too low to keep",
+};
+
+/**
+ * The warning for pages a parse reached but took no text from, or null when
+ * there were none. Missing content must read as missing: a search finding
+ * nothing on those pages is otherwise indistinguishable from a topic the
+ * document does not cover.
+ */
+export function describePagesWithoutText(
+  pages: readonly PageWithoutText[],
+  pageCount: number,
+): string | null {
+  if (pages.length === 0) return null;
+
+  const groups = (Object.keys(PAGE_REASONS) as PageWithoutText["reason"][])
+    .map((reason) => {
+      const numbers = pages.filter((p) => p.reason === reason).map((p) => p.page);
+      if (numbers.length === 0) return null;
+      const listed = pageRanges(numbers.slice(0, MAX_LISTED_PAGES));
+      const more = numbers.length > MAX_LISTED_PAGES ? ` and ${numbers.length - MAX_LISTED_PAGES} more` : "";
+      return `${PAGE_REASONS[reason]}: ${numbers.length === 1 ? "p." : "pp."} ${listed}${more}`;
+    })
+    .filter((g): g is string => g !== null);
+
+  return (
+    `${pages.length} of ${pageCount} page(s) yielded no text and are not searchable ` +
+    `(${groups.join("; ")}).`
+  );
+}
+
+/** [3, 7, 8, 9, 12] -> "3, 7–9, 12" */
+function pageRanges(pages: readonly number[]): string {
+  const sorted = [...new Set(pages)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i]!;
+    while (sorted[i + 1] === sorted[i]! + 1) i++;
+    out.push(start === sorted[i] ? String(start) : `${start}–${sorted[i]}`);
+  }
+  return out.join(", ");
 }

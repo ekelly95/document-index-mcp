@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { DocumentMetadata, DocumentSource } from "../ir.js";
 
 /**
@@ -37,6 +37,21 @@ export function loadPdf(src: DocumentSource): Promise<LoadedPdf> {
     "pdfjs",
     () => openPdf(src),
     (loaded) => loaded.close(),
+  );
+}
+
+/**
+ * Does this page paint an image? Asked only of pages with no usable text, so
+ * the operator list (a full content-stream walk) is rarely paid for.
+ */
+export async function paintsImage(page: PDFPageProxy): Promise<boolean> {
+  const { OPS } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const ops = await page.getOperatorList();
+  return ops.fnArray.some(
+    (fn) =>
+      fn === OPS.paintImageXObject ||
+      fn === OPS.paintInlineImageXObject ||
+      fn === OPS.paintImageXObjectRepeat,
   );
 }
 
