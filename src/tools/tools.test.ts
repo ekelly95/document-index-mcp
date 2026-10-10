@@ -9,7 +9,8 @@ import { loadConfig } from "../config.js";
 import { createContext, type AppContext } from "../context.js";
 import { testEmbedder } from "../testing/stubEmbedder.js";
 import { buildServer } from "../server.js";
-import { indexCounts } from "../db/chunksRepo.js";
+import { indexCounts, insertChunks } from "../db/chunksRepo.js";
+import { EMBEDDING_DIM, EMBEDDING_MODEL_NAME } from "../embeddings/embedder.js";
 import { deleteDocument, INGEST_LEASE_MS, insertDocument } from "../db/documentsRepo.js";
 import { buildPdf, type PdfFixture } from "../testing/pdfFixture.js";
 
@@ -377,12 +378,65 @@ test("get_chunk_context at seq 0 reports nothing before it", async () => {
   assert.equal(data.has_more_before, false);
 });
 
-test("a body read never exceeds the hard cap", async () => {
-  const data = dataOf<{ chunks: { text: string }[] }>(
-    await call("get_chunk_context", { document_id: documentId, seq: 3, before: 5, after: 5 }),
+test("a body read never exceeds the hard cap, even when its anchor alone does", async () => {
+  // Chunked normally, eleven chunks cannot reach 24k characters, so the rows
+  // are written directly: oversized neighbours, and an anchor of the kind an
+  // index built before unsplittable units were bounded can still hold.
+  const id = "oversized-test-doc";
+  insertDocument(ctx.db, {
+    id,
+    title: "Oversized",
+    sourcePath: "oversized.md",
+    format: "md",
+    sha256: "sha-oversized",
+    engineUsed: "ts-fast",
+    locatorScheme: "section",
+    locatorCount: 1,
+    embeddingModel: EMBEDDING_MODEL_NAME,
+    ingestWarning: null,
+  });
+  const sizes = [5_000, 5_000, 5_000, 60_000, 5_000, 5_000, 5_000];
+  insertChunks(
+    ctx.db,
+    id,
+    sizes.map((size, seq) => ({
+      chunkId: `${id}-${seq}`,
+      seq,
+      kind: "text" as const,
+      locator: { type: "section" as const, value: "sec-1", ordinal: 0 },
+      pageNumber: null,
+      sectionPath: [],
+      bbox: null,
+      text: `${"zq ".repeat(size / 3)}`.trim(),
+      tokenCount: size / 4,
+      embedding: new Array<number>(EMBEDDING_DIM).fill(0.01),
+    })),
   );
-  const total = data.chunks.reduce((s, c) => s + c.text.length, 0);
-  assert.ok(total <= 24_000, `returned ${total} chars, over the 24k cap`);
+
+  try {
+    const res = await call("get_chunk_context", { document_id: id, seq: 3, before: 3, after: 3 });
+    const data = dataOf<{
+      chunks: { seq: number; text: string; truncated?: boolean }[];
+      has_more_before: boolean;
+      has_more_after: boolean;
+    }>(res);
+    const total = data.chunks.reduce((s, c) => s + c.text.length, 0);
+    assert.ok(total <= 24_000, `returned ${total} chars, over the 24k cap`);
+    assert.deepEqual(data.chunks.map((c) => c.seq), [3], "the anchor was not kept, or neighbours survived");
+    assert.equal(data.chunks[0]!.truncated, true);
+    assert.equal(data.has_more_before, true);
+    assert.equal(data.has_more_after, true);
+    assert.match(textOf(res), /truncated/);
+
+    // With an ordinary anchor the neighbours are trimmed, not the anchor.
+    const around = dataOf<{ chunks: { seq: number; text: string; truncated?: boolean }[] }>(
+      await call("get_chunk_context", { document_id: id, seq: 1, before: 1, after: 1 }),
+    );
+    assert.deepEqual(around.chunks.map((c) => c.seq), [0, 1, 2]);
+    assert.ok(around.chunks.every((c) => c.truncated === undefined));
+  } finally {
+    deleteDocument(ctx.db, id);
+  }
 });
 
 test("search is deterministic for a fixed query and corpus", async () => {

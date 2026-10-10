@@ -6,6 +6,12 @@
  * correct. chars/4 is the usual approximation for Latin script; CJK glyphs are
  * roughly one token each, which chars/4 underestimates by ~4x, so they are
  * counted separately.
+ *
+ * Every splitter here keeps one promise: each part it returns fits within
+ * `maxTokens` (plus, for code and tables, the fence or header it repeats).
+ * Structure decides where a cut goes when it can; `splitHard` is the last
+ * resort for a unit with no structure left to cut at, such as a minified line
+ * or a base64 blob, which used to become one unbounded chunk.
  */
 
 const CJK_RANGES =
@@ -74,6 +80,13 @@ function splitWords(text: string, maxTokens: number): string[] {
   const parts: string[] = [];
   let current = "";
   for (const word of words) {
+    if (estimateTokens(word) > maxTokens) {
+      const trimmed = current.trim();
+      if (trimmed) parts.push(trimmed);
+      current = "";
+      parts.push(...splitHard(word, maxTokens));
+      continue;
+    }
     if (current && estimateTokens(current + word) > maxTokens) {
       const trimmed = current.trim();
       if (trimmed) parts.push(trimmed);
@@ -84,6 +97,53 @@ function splitWords(text: string, maxTokens: number): string[] {
   const trimmed = current.trim();
   if (trimmed) parts.push(trimmed);
   return parts;
+}
+
+/**
+ * Cut text into parts of at most `maxTokens` with no regard for structure,
+ * preferring whitespace near the end of each window when there is any. Counted
+ * the way `estimateTokens` counts, so a CJK run is cut as tightly as Latin.
+ */
+export function splitHard(text: string, maxTokens: number): string[] {
+  const budget = Math.max(1, Math.floor(maxTokens));
+  const parts: string[] = [];
+  const push = (part: string) => {
+    const trimmed = part.trimEnd();
+    if (trimmed.trim()) parts.push(trimmed);
+  };
+
+  let start = 0;
+  let latin = 0;
+  let cjk = 0;
+  /** Index just past the last whitespace in the current window, or -1. */
+  let lastBreak = -1;
+  const count = (ch: string) => {
+    if (CJK_RANGES.test(ch)) cjk++;
+    else latin += ch.length;
+  };
+
+  let i = 0;
+  while (i < text.length) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    const isCjk = CJK_RANGES.test(ch);
+    const next = Math.ceil((latin + (isCjk ? 0 : ch.length)) / 4) + cjk + (isCjk ? 1 : 0);
+    if (next > budget && i > start) {
+      const cut = lastBreak > start + (i - start) * 0.9 ? lastBreak : i;
+      push(text.slice(start, cut));
+      start = cut;
+      latin = 0;
+      cjk = 0;
+      lastBreak = -1;
+      for (const carried of text.slice(start, i)) count(carried);
+      continue;
+    }
+    count(ch);
+    i += ch.length;
+    if (/\s/u.test(ch)) lastBreak = i;
+  }
+  push(text.slice(start));
+
+  return parts.length > 0 ? parts : [text];
 }
 
 /**
@@ -145,6 +205,15 @@ export function splitCode(text: string, maxTokens: number): string[] {
   const overhead = estimateTokens(`${fenceOpen}\n\n\`\`\``);
 
   for (const line of body) {
+    if (estimateTokens(line) + overhead > maxTokens) {
+      // One line longer than a whole chunk: minified code, an inlined blob.
+      if (current.length > 0) parts.push(`${fenceOpen}\n${current.join("\n")}\n\`\`\``);
+      current = [];
+      for (const piece of splitHard(line, maxTokens - overhead)) {
+        parts.push(`${fenceOpen}\n${piece}\n\`\`\``);
+      }
+      continue;
+    }
     const projected = [...current, line].join("\n");
     if (current.length > 0 && estimateTokens(projected) + overhead > maxTokens) {
       parts.push(`${fenceOpen}\n${current.join("\n")}\n\`\`\``);
@@ -178,6 +247,16 @@ export function splitTable(text: string, maxTokens: number): string[] {
   let current: string[] = [];
 
   for (const row of lines.slice(2)) {
+    // The newline joining header and row counts too.
+    const rowBudget = maxTokens - headerTokens - 1;
+    if (estimateTokens(row) > rowBudget) {
+      // One row longer than a whole chunk. Its pieces are not valid rows, but
+      // each still sits under the header it belongs to.
+      if (current.length > 0) parts.push(`${headerBlock}\n${current.join("\n")}`);
+      current = [];
+      for (const piece of splitHard(row, rowBudget)) parts.push(`${headerBlock}\n${piece}`);
+      continue;
+    }
     const projected = estimateTokens([...current, row].join("\n")) + headerTokens;
     if (current.length > 0 && projected > maxTokens) {
       parts.push(`${headerBlock}\n${current.join("\n")}`);

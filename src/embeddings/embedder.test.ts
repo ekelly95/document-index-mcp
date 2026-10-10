@@ -150,6 +150,11 @@ test("context gives way so the chunk's own text always reaches the model", async
 
   const bare = await fitEmbedInput(chunk, count, 90);
   assert.equal(bare, chunk.text);
+
+  // Text alone over the window: every candidate fails, and the last — the
+  // bare text — goes through for the model to truncate, rather than nothing.
+  const overflow = await fitEmbedInput(chunk, count, 50);
+  assert.equal(overflow, chunk.text);
 });
 
 test("with the real tokenizer, fitted chunks never exceed the model window", {

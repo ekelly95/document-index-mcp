@@ -367,6 +367,10 @@ async function* fitOne(
   depth: number,
 ): AsyncIterable<DraftChunk> {
   const real = await count(chunk.text);
+  // The depth limit and the no-progress check below are backstops: the
+  // splitters always cut to the ceiling they are given, so a part that is
+  // still over after a round needs a tokenizer wildly out of step with the
+  // estimate. They keep a pathological counter from looping, not from passing.
   if (real <= budget || depth >= 4) {
     yield chunk;
     return;

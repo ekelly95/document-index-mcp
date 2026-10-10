@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   estimateTokens,
   splitCode,
+  splitHard,
   splitList,
   splitProse,
   splitTable,
@@ -170,4 +171,34 @@ test("no splitter ever returns nothing", () => {
     assert.ok(split("x", 1).length > 0, split.name);
     assert.ok(split("   ", 1).length > 0, split.name);
   }
+});
+
+test("a unit with nothing to cut at is still split within budget", () => {
+  // One whitespace-free run, one code line, one table row: each used to come
+  // back as a single part of 60,000 characters, which became a chunk that
+  // get_chunk_context returned whole.
+  const blob = "x".repeat(60_000);
+
+  const prose = splitProse(blob, MAX);
+  assert.deepEqual(over(prose), []);
+  assert.equal(prose.join(""), blob, "characters were lost");
+
+  const code = splitCode(["```js", blob, "```"].join("\n"), MAX);
+  assert.deepEqual(over(code), []);
+  for (const part of code) assert.ok(part.startsWith("```js\n") && part.endsWith("\n```"));
+
+  const table = splitTable(["| A | B |", "|---|---|", `| ${blob} | 1 |`].join("\n"), MAX);
+  assert.deepEqual(over(table), []);
+  for (const part of table) assert.ok(part.startsWith("| A | B |\n|---|---|\n"));
+});
+
+test("a hard split counts CJK glyphs as tokens, and prefers whitespace near the end", () => {
+  const cjk = splitHard("日".repeat(500), MAX);
+  assert.deepEqual(over(cjk), []);
+  assert.equal(cjk.join(""), "日".repeat(500));
+
+  // A space inside the last tenth of the window is where the cut goes.
+  const words = splitHard(`${"a".repeat(150)} ${"b".repeat(200)}`, MAX);
+  assert.equal(words[0], "a".repeat(150));
+  assert.deepEqual(over(words), []);
 });

@@ -226,6 +226,44 @@ test("prose chunks stay within the token cap", async () => {
   }
 });
 
+test("one unsplittable line is still cut to the cap", async () => {
+  // A minified line in a fence: no line break, no space. It used to become a
+  // single 60,000-character chunk that no read could bound.
+  const line = "a=1;".repeat(15_000);
+  const chunks = await collect([block("code", ["```js", line, "```"].join("\n"), 1)]);
+  assert.ok(chunks.length > 1);
+  for (const chunk of chunks) {
+    assert.ok(chunk.tokenCount <= MAX_TOKENS, `chunk of ${chunk.tokenCount} tokens`);
+    assert.equal(chunk.kind, "code");
+  }
+  assert.equal(
+    chunks.map((c) => c.text.replace(/^```js\n|\n```$/g, "")).join(""),
+    line,
+    "characters were lost",
+  );
+});
+
+test("fitToBudget terminates when the tokenizer is never satisfied", async () => {
+  // A counter that is never satisfied: without the depth limit this splits
+  // until every part is one character.
+  const draft: DraftChunk = {
+    kind: "text",
+    locator: { type: "page", value: "1", ordinal: 0 },
+    sectionPath: [],
+    bbox: null,
+    text: "word ".repeat(2_000).trim(),
+    overlapPrefix: null,
+    tokenCount: 2_500,
+  };
+  async function* one() {
+    yield draft;
+  }
+  const out: DraftChunk[] = [];
+  for await (const c of fitToBudget(one(), async () => Number.MAX_SAFE_INTEGER, 100)) out.push(c);
+  assert.ok(out.length > 1);
+  assert.equal(out.map((c) => c.text).join(" "), draft.text, "text was lost");
+});
+
 test("an empty stream produces no chunks", async () => {
   assert.deepEqual(await collect([]), []);
 });
