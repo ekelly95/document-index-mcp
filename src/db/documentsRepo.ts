@@ -1,7 +1,8 @@
 import type { Format, LocatorType } from "../pipeline/ir.js";
 import type { Db } from "./sqlite.js";
 
-export type IngestStatus = "pending" | "processing" | "ready" | "failed";
+/** No code path writes the schema's 'pending' (its column default); every insert claims as 'processing'. */
+export type IngestStatus = "processing" | "ready" | "failed";
 
 export interface DocumentRow {
   id: string;

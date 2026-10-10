@@ -1,7 +1,7 @@
 import * as z from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
-import { listProcessing } from "../db/documentsRepo.js";
+import { getDocument, listProcessing } from "../db/documentsRepo.js";
 import { assessConfidence, hybridSearch } from "../retrieval/hybrid.js";
 import {
   CHUNK_KINDS,
@@ -113,6 +113,15 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
           if (lo > hi) {
             return fail(`page_range must be [low, high] with low <= high; got [${lo}, ${hi}].`);
           }
+        }
+
+        // A mistyped id is a call that cannot succeed, not a search that found
+        // nothing; "try omitting document_id" sent callers the wrong way.
+        if (args.document_id !== undefined && !getDocument(ctx.db, args.document_id)) {
+          return fail(
+            `Unknown document_id "${args.document_id}". Call get_document_outline with no ` +
+              "arguments to list the library.",
+          );
         }
 
         const hits = await hybridSearch(ctx.db, ctx.embedder, {

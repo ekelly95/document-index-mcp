@@ -392,6 +392,10 @@ function paragraphText(p: XmlElement): string {
       out += " ";
       return;
     }
+    // A tracked move keeps its text, as w:t, at both ends: w:moveFrom where
+    // it left and w:moveTo where it landed. Read once, at its destination,
+    // as deleted text (w:delText, never matched above) already is not read.
+    if (name === "moveFrom") return;
     for (const child of elements(el)) visit(child);
   };
   for (const child of elements(p)) visit(child);

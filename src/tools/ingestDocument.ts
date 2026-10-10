@@ -17,6 +17,13 @@ const outputSchema = z.object({
   status: z.enum(["processing", "ready"]),
   locator_count: z.number().int(),
   reused: z.boolean(),
+  moved_from: z
+    .string()
+    .nullable()
+    .describe(
+      "Set when this file's bytes were already indexed under another path: the document " +
+        "now lists this path instead, and the old one no longer appears in the library",
+    ),
   warning: z
     .string()
     .nullable()
@@ -30,8 +37,8 @@ export function registerIngestDocument(server: McpServer, ctx: AppContext): void
       title: "Ingest Document",
       description:
         "Index a file from the library into the retrieval index. PDF, DOCX, Markdown and " +
-        "plain text are ingestible in this build; EPUB, PowerPoint, HTML and legacy binary " +
-        "Office (.doc) are recognised and refused with a reason naming the remedy. " +
+        "plain text are ingestible in this build; EPUB, PowerPoint, HTML and legacy Word " +
+        "(.doc) are refused with a reason naming the remedy. " +
         "Scanned PDFs are detected and " +
         "OCR'd automatically — expect those to index slowly, a few seconds per page. " +
         "Format is decided by content " +
@@ -74,12 +81,17 @@ export function registerIngestDocument(server: McpServer, ctx: AppContext): void
           status: reused ? ("ready" as const) : ("processing" as const),
           locator_count: handle.locatorCount,
           reused,
+          moved_from: handle.movedFrom,
           warning: handle.warning,
         };
 
         const text =
           handle.outcome === "reused"
-            ? `"${handle.title}" is already indexed (document_id ${handle.documentId}). Nothing to do.`
+            ? handle.movedFrom !== null
+              ? `"${handle.title}" is already indexed (document_id ${handle.documentId}) from ` +
+                `identical bytes at ${handle.movedFrom}. Its library path moved here from ` +
+                `${handle.movedFrom}, which no longer appears in the listing.`
+              : `"${handle.title}" is already indexed (document_id ${handle.documentId}). Nothing to do.`
             : handle.outcome === "joined"
               ? `"${handle.title}" is already being indexed by an earlier call ` +
                 `(document_id ${handle.documentId}). Nothing further started. ` +

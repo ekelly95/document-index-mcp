@@ -626,3 +626,23 @@ test("an ingested PDF with an image-only page finishes with a warning naming it"
   assert.equal(row.ingest_status, "ready");
   assert.match(row.ingest_warning ?? "", /1 of 4 page\(s\) yielded no text.*p\. 3/);
 });
+
+test("ingesting a byte-identical copy says the document moved, and from where", async () => {
+  const body = "# Copy\n\nThe same words, in two places.\n";
+  await fs.writeFile(path.join(library, "first.md"), body);
+  await fs.writeFile(path.join(library, "second.md"), body);
+
+  const first = await beginIngest(contextWith(stubInit()), "first.md");
+  await first.done;
+  assert.equal(first.movedFrom, null);
+
+  const again = await beginIngest(contextWith(stubInit()), "first.md");
+  assert.equal(again.outcome, "reused");
+  assert.equal(again.movedFrom, null, "re-ingesting in place is not a move");
+
+  const copy = await beginIngest(contextWith(stubInit()), "second.md");
+  assert.equal(copy.outcome, "reused");
+  assert.equal(copy.documentId, first.documentId);
+  assert.equal(copy.movedFrom, "first.md");
+  assert.deepEqual(docsAtPath("first.md"), []);
+});

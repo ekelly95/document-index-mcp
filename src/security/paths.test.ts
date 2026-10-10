@@ -59,6 +59,15 @@ test("the formats this build does not read are refused at the gate", () => {
   }
 });
 
+test("a refused format a caller is likely to try is refused with its remedy", () => {
+  assert.throws(() => safeResolve(library, "book.epub"), /convert it to PDF or Markdown/);
+  for (const deck of ["deck.pptx", "deck.ppt"]) {
+    assert.throws(() => safeResolve(library, deck), /convert-for-ingest\.ps1/);
+  }
+  // Nothing to suggest for an arbitrary extension.
+  assert.throws(() => safeResolve(library, "notes.exe"), /Supported: .*\.txt$/);
+});
+
 test("accepts uppercase extensions (Windows is case-insensitive)", () => {
   assert.doesNotThrow(() => safeResolve(library, "Book.PDF"));
 });

@@ -39,7 +39,7 @@ const outputSchema = z.object({
         title: z.string(),
         source_path: z.string().describe("Library-relative path; what ingest_document takes"),
         format: z.enum(FORMATS),
-        ingest_status: z.enum(["pending", "processing", "ready", "failed"]),
+        ingest_status: z.enum(["processing", "ready", "failed"]),
         chunk_count: z.number().int(),
         locator_count: z.number().int(),
         ingest_warning: z
@@ -55,7 +55,7 @@ const outputSchema = z.object({
   locator_scheme: z.enum(LOCATOR_TYPES).optional(),
   locator_count: z.number().int().optional(),
   chunk_count: z.number().int().optional(),
-  ingest_status: z.enum(["pending", "processing", "ready", "failed"]).optional(),
+  ingest_status: z.enum(["processing", "ready", "failed"]).optional(),
   error_message: z.string().nullable().optional(),
   ingest_warning: z.string().nullable().optional(),
   entries: z.array(OutlineNodeShape).optional(),
@@ -125,7 +125,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
           const text =
             doc.ingest_status === "processing"
               ? `"${oneLine(doc.title)}" is still indexing — ${doc.chunk_count} chunks so far ` +
-                `(~${doc.locator_count} sections expected). Call again shortly.`
+                `(~${doc.locator_count} ${doc.locator_scheme}s expected). Call again shortly.`
               : `"${oneLine(doc.title)}" is ${doc.ingest_status}.` +
                 (doc.error_message ? ` ${doc.error_message}` : "");
           return okStructured(text, payload);

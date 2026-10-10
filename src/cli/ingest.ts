@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { loadConfig } from "../config.js";
 import { createContext } from "../context.js";
@@ -6,6 +5,7 @@ import { indexCounts } from "../db/chunksRepo.js";
 import { beginIngest, drainIngests } from "../ingest/runner.js";
 import { disposeOcrPool } from "../pipeline/parsers/ocrPool.js";
 import { installProcessHandlers } from "../log.js";
+import { resolveTargets } from "./targets.js";
 
 /**
  * Bulk ingest, outside the MCP request/response cycle.
@@ -17,28 +17,8 @@ import { installProcessHandlers } from "../log.js";
  *   pnpm ingest --library=C:\Users\me\Notes . --recursive
  */
 
-const SUPPORTED = new Set([".md", ".markdown", ".txt", ".pdf", ".docx"]);
-
 /** How long an interrupted run waits for the document in hand. */
 const DRAIN_TIMEOUT_MS = 30_000;
-
-async function* walk(dir: string, recursive: boolean): AsyncGenerator<string> {
-  let entries;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue; // .git, .obsidian, .document-index
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (recursive) yield* walk(full, recursive);
-    } else if (entry.isFile() && SUPPORTED.has(path.extname(entry.name).toLowerCase())) {
-      yield full;
-    }
-  }
-}
 
 async function main(): Promise<void> {
   installProcessHandlers();
@@ -48,6 +28,19 @@ async function main(): Promise<void> {
   if (targets.length === 0) targets.push(".");
 
   const config = loadConfig(argv);
+  process.stderr.write(`library: ${config.libraryRoot}\ndb:      ${config.dbPath}\n\n`);
+
+  // Before the lock and the model, so a mistyped target fails in a moment.
+  const { files, resolved } = await resolveTargets(config.libraryRoot, targets, recursive, (m) =>
+    process.stderr.write(`${m}\n`),
+  );
+  // A mistyped target used to print "0 file(s)" and exit 0, which reads as
+  // success to anything scripting this.
+  if (resolved === 0) {
+    process.stderr.write(`\nnothing to ingest: no target exists under ${config.libraryRoot}\n`);
+    process.exit(2);
+  }
+
   // Unlike the server, which runs as a peer when another process holds the
   // lock, a bulk run insists on it: see ContextOptions.requireIndexLock.
   const ctx = createContext(config, { requireIndexLock: true });
@@ -81,24 +74,8 @@ async function main(): Promise<void> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  process.stderr.write(`library: ${config.libraryRoot}\ndb:      ${config.dbPath}\n\n`);
   process.stderr.write("warming up the embedding model (first run downloads ~65MB)...\n");
   await ctx.embedder.warmup();
-
-  const files: string[] = [];
-  for (const target of targets) {
-    const abs = path.resolve(config.libraryRoot, target);
-    const stat = await fs.stat(abs).catch(() => null);
-    if (!stat) {
-      process.stderr.write(`skip (not found): ${target}\n`);
-      continue;
-    }
-    if (stat.isDirectory()) {
-      for await (const file of walk(abs, recursive)) files.push(file);
-    } else {
-      files.push(abs);
-    }
-  }
 
   process.stderr.write(`\n${files.length} file(s) to consider\n\n`);
 
@@ -115,7 +92,13 @@ async function main(): Promise<void> {
       if (handle.outcome !== "started") {
         skipped++;
         process.stderr.write(
-          `${prefix} — ${handle.outcome === "reused" ? "already indexed" : "already being indexed elsewhere"}\n`,
+          `${prefix} — ${
+            handle.outcome === "joined"
+              ? "already being indexed elsewhere"
+              : handle.movedFrom !== null
+                ? `already indexed as ${handle.movedFrom} (identical bytes); moved to this path`
+                : "already indexed"
+          }\n`,
         );
         continue;
       }

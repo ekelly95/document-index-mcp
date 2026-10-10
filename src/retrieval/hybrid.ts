@@ -277,6 +277,20 @@ export function semanticSnippet(text: string, query: string, maxChars = 300): st
   return `${start > 0 ? "…" : ""}${text.slice(start, end).trim()}${end < text.length ? "…" : ""}`;
 }
 
+/** The snippet length the tool contract promises. */
+export const SNIPPET_MAX_CHARS = 300;
+
+/**
+ * Hold a snippet to the contract. FTS5's snippet() counts tokens, not
+ * characters, so twelve long tokens can run past it, and the semantic window
+ * adds its ellipses on top.
+ */
+function capSnippet(snippet: string): string {
+  if (snippet.length <= SNIPPET_MAX_CHARS) return snippet;
+  // A lone high surrogate left by the cut is dropped, not shown as garbage.
+  return `${snippet.slice(0, SNIPPET_MAX_CHARS - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…`;
+}
+
 export async function hybridSearch(
   db: Db,
   embedder: Embedder,
@@ -419,7 +433,7 @@ function fuseAndHydrate(
     hits.push({
       row,
       score,
-      snippet: lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query),
+      snippet: capSnippet(lexical.snippets.get(id) ?? semanticSnippet(row.text, q.query)),
       similarity: null,
       lexicalMatch: lexical.snippets.has(id),
     });

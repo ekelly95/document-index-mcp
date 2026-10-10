@@ -32,8 +32,8 @@ const ALLOWED_EXTENSIONS = new Set([
   ".pdf",
   ".docx",
   // Legacy Word is admitted so the router's refusal can name the remedy
-  // (convert with Word) instead of the gate refusing opaquely. .ppt is NOT,
-  // because there is no longer a slide format to convert it to.
+  // (convert with Word) instead of the gate refusing opaquely. .ppt is NOT:
+  // with no slide parser to route to, the gate refuses it with the remedy.
   ".doc",
   ".md",
   ".markdown",
@@ -41,6 +41,25 @@ const ALLOWED_EXTENSIONS = new Set([
   ".htm",
   ".txt",
 ]);
+
+/**
+ * Formats a caller is likely to try that the gate refuses, with what to do
+ * instead. They are refused here rather than by the router (which explains
+ * .doc and .html) because neither has a parser to route to.
+ */
+const SLIDE_DECK_REMEDY =
+  "Slide decks are not read: run scripts/convert-for-ingest.ps1 on the deck (Windows, with " +
+  "PowerPoint) and ingest the PDF of the slides and the Markdown file of speaker notes it " +
+  "writes. Elsewhere, `soffice --headless --convert-to pdf` gives the slides at lower " +
+  "fidelity, without the notes.";
+
+const REFUSED_WITH_REMEDY: Record<string, string> = {
+  ".epub":
+    "EPUB is not read, because its locators could not name a real chapter: convert it to PDF " +
+    "or Markdown (Calibre's ebook-convert does either) and ingest that.",
+  ".pptx": SLIDE_DECK_REMEDY,
+  ".ppt": SLIDE_DECK_REMEDY,
+};
 
 /**
  * Resolve a library-relative path to a safe absolute path, or throw.
@@ -69,8 +88,10 @@ export function safeResolve(libraryRoot: string, relInput: string): string {
   // Case-insensitive: on Windows `Book.PDF` and `book.pdf` are the same file.
   const ext = path.extname(resolved).toLowerCase();
   if (!ALLOWED_EXTENSIONS.has(ext)) {
+    const remedy = REFUSED_WITH_REMEDY[ext];
     throw new PathTraversalError(
-      `Unsupported file type "${ext || "(none)"}". Supported: ${[...ALLOWED_EXTENSIONS].join(", ")}`,
+      `Unsupported file type "${ext || "(none)"}". Supported: ${[...ALLOWED_EXTENSIONS].join(", ")}` +
+        (remedy ? `. ${remedy}` : ""),
     );
   }
 

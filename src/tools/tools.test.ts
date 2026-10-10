@@ -305,7 +305,7 @@ test("progressive disclosure: search returns snippets, never body text", async (
   for (const hit of data.hits) {
     assert.ok(!("text" in hit), "a search hit carried full chunk text");
     assert.ok(typeof hit["snippet"] === "string");
-    assert.ok((hit["snippet"] as string).length <= 400);
+    assert.ok((hit["snippet"] as string).length <= 300);
   }
 });
 
@@ -997,4 +997,10 @@ test("deleteDocument leaves all three indexes in agreement", async () => {
   assert.ok(after.chunks < before.chunks, "nothing was deleted");
   assert.equal(after.fts, after.chunks, "FTS left orphans behind");
   assert.equal(after.vectors, after.chunks, "vector index left orphans behind");
+});
+
+test("search names an unknown document_id instead of reporting no matches", async () => {
+  const res = await call("search_document", { query: "sampling frame", document_id: "01NOTATHING" });
+  assert.equal((res as { isError?: boolean }).isError, true);
+  assert.match(textOf(res), /Unknown document_id "01NOTATHING"/);
 });

@@ -100,6 +100,12 @@ export interface IngestHandle {
   warning: string | null;
   outcome: IngestOutcome;
   /**
+   * For "reused" only: the path the document was listed under before this
+   * call moved it here. Identical bytes are one document, so ingesting a copy
+   * relocates it and the first path drops out of the listing.
+   */
+  movedFrom: string | null;
+  /**
    * Resolves when THIS call's indexing finishes.
    *
    * Already resolved for "reused" and "joined", where this call is not the
@@ -303,6 +309,7 @@ function settled(row: DocumentRow, outcome: IngestOutcome): IngestHandle {
     locatorCount: row.locator_count,
     warning: row.ingest_warning,
     outcome,
+    movedFrom: null,
     done: Promise.resolve(),
   };
 }
@@ -360,10 +367,12 @@ function claimForIngest(
       // is indexed, so there is no later failure to survive. deleteDocument, not a
       // raw DELETE: no cascade reaches the vec0 table.
       for (const id of staleIds) deleteDocument(ctx.db, id);
-      if (existing.source_path !== sourcePath) {
-        setSourcePath(ctx.db, existing.id, sourcePath);
-      }
-      return { claim: claimOf(existing, "reused"), supersede: [] };
+      const moved = existing.source_path !== sourcePath;
+      if (moved) setSourcePath(ctx.db, existing.id, sourcePath);
+      return {
+        claim: { ...claimOf(existing, "reused"), movedFrom: moved ? existing.source_path : null },
+        supersede: [],
+      };
     }
 
     const fields = {
@@ -390,6 +399,7 @@ function claimForIngest(
           locatorCount: meta.locatorCount,
           warning: meta.warning ?? null,
           outcome: "started",
+          movedFrom: null,
         },
         supersede: staleIds,
       };
@@ -405,6 +415,7 @@ function claimForIngest(
         locatorCount: meta.locatorCount,
         warning: meta.warning ?? null,
         outcome: "started",
+        movedFrom: null,
       },
       supersede: staleIds,
     };
@@ -419,6 +430,7 @@ function claimOf(row: DocumentRow, outcome: IngestOutcome): Claim {
     locatorCount: row.locator_count,
     warning: row.ingest_warning,
     outcome,
+    movedFrom: null,
   };
 }
 

@@ -266,7 +266,12 @@ test("every hit carries a snippet, from whichever leg found it", async () => {
 
   const semantic = await search({ query: "badgers", k: 5, mode: "semantic" });
   assert.ok(semantic[0]!.snippet.length > 0);
-  assert.ok(semantic[0]!.snippet.length <= 400, "semantic snippet was not bounded");
+  assert.ok(semantic[0]!.snippet.length <= 300, "semantic snippet was not bounded");
+
+  // FTS5 counts its window in tokens; twelve long ones overran 300 characters.
+  seed("long", [{ text: `badgers rank02 ${Array.from({ length: 20 }, () => "x".repeat(60)).join(" ")}` }]);
+  const long = await search({ query: "badgers", k: 5, mode: "lexical", documentId: "long" });
+  assert.ok(long[0]!.snippet.length <= 300, `lexical snippet ran to ${long[0]!.snippet.length}`);
 });
 
 test("reference lists are left out unless asked for by kind", async () => {
