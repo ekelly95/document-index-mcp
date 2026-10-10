@@ -602,3 +602,61 @@ test("a bookmark's internal whitespace is collapsed, not carried into the trail"
   const trail = blocks.find((b) => b.sectionPath.length > 0)?.sectionPath ?? [];
   assert.deepEqual(trail, ["Slide 3: Sapphires"], `trail was ${JSON.stringify(trail)}`);
 });
+
+/** The trail each body paragraph was filed under, keyed by its text. */
+const trailsOf = (blocks: readonly DocBlock[]) =>
+  new Map(blocks.filter((b) => b.kind === "paragraph").map((b) => [b.text, b.sectionPath.join(" › ")]));
+
+test("a named destination is resolved, not skipped", async () => {
+  // hyperref writes every bookmark as a name looked up in the catalog. Those
+  // were skipped, so LaTeX documents got no bookmark trail at all.
+  const blocks = await collect(
+    await write("named.pdf", {
+      outline: [{ title: "Introduction", page: 0, named: "section.1" }],
+      pages: [{ lines: [{ text: "Body of the introduction.", x: 72, y: 700, size: 11 }] }],
+    }),
+  );
+  assert.equal(trailsOf(blocks).get("Body of the introduction."), "Introduction");
+});
+
+test("a mid-page bookmark starts its section where it points, not at the top of the page", async () => {
+  const blocks = await collect(
+    await write("midpage.pdf", {
+      outline: [
+        { title: "Alpha", page: 0, top: 760 },
+        { title: "Beta", page: 1, top: 500 },
+        { title: "Gamma", page: 1, top: 300 },
+      ],
+      pages: [
+        { lines: [{ text: "Alpha opens the book.", x: 72, y: 700, size: 11 }] },
+        { lines: [
+          { text: "Alpha continues at the top of page two.", x: 72, y: 700, size: 11 },
+          { text: "Beta begins halfway down.", x: 72, y: 490, size: 11 },
+          { text: "Gamma shares the page with Beta.", x: 72, y: 290, size: 11 },
+        ] },
+        { lines: [{ text: "Gamma runs on to page three.", x: 72, y: 700, size: 11 }] },
+      ],
+    }),
+  );
+  const trails = trailsOf(blocks);
+  assert.equal(trails.get("Alpha opens the book."), "Alpha");
+  assert.equal(trails.get("Alpha continues at the top of page two."), "Alpha", "text above Beta was filed under it");
+  assert.equal(trails.get("Beta begins halfway down."), "Beta");
+  // The second section starting on one page used to be dropped entirely.
+  assert.equal(trails.get("Gamma shares the page with Beta."), "Gamma");
+  assert.equal(trails.get("Gamma runs on to page three."), "Gamma");
+});
+
+test("a chapter and its first section at one spot do not nest the chapter heading", async () => {
+  // First wins at a shared destination; heading detection supplies the rest.
+  const blocks = await collect(
+    await write("shared-dest.pdf", {
+      outline: [
+        { title: "Chapter 1", page: 0, top: 760 },
+        { title: "1.1 Origins", page: 0, top: 760 },
+      ],
+      pages: [{ lines: [{ text: "Chapter prose.", x: 72, y: 700, size: 11 }] }],
+    }),
+  );
+  assert.equal(trailsOf(blocks).get("Chapter prose."), "Chapter 1");
+});

@@ -45,6 +45,16 @@ export interface FixtureOutlineEntry {
   title: string;
   /** 0-based page index. */
   page: number;
+  /**
+   * Where on the page the section starts, in user space: written as an /XYZ
+   * destination. Omitted, the destination is /Fit, which names a page only.
+   */
+  top?: number;
+  /**
+   * Reach the destination through the catalog's /Dests by this name, the way
+   * LaTeX's hyperref writes every bookmark, rather than inline.
+   */
+  named?: string;
 }
 
 export interface PdfFixture {
@@ -163,7 +173,12 @@ export function buildPdf(fixture: PdfFixture): Buffer {
       ? ` /PageLabels << /Nums [0 << /S /r >> ${fixture.romanFrontMatter} << /S /D /St 1 >>] >>`
       : "";
   const outlineRef = hasOutline ? ` /Outlines ${outlineRoot} 0 R` : "";
-  push(`<< /Type /Catalog /Pages 2 0 R${pageLabels}${outlineRef} >>`);
+  const destOf = (entry: FixtureOutlineEntry) =>
+    `[${pageObj(entry.page)} 0 R ${entry.top === undefined ? "/Fit" : `/XYZ 0 ${entry.top} 0`}]`;
+  const named = (fixture.outline ?? []).filter((e) => e.named !== undefined);
+  const dests =
+    named.length > 0 ? ` /Dests << ${named.map((e) => `/${e.named} ${destOf(e)}`).join(" ")} >>` : "";
+  push(`<< /Type /Catalog /Pages 2 0 R${pageLabels}${outlineRef}${dests} >>`);
 
   // 2 — page tree
   const kids = fixture.pages.map((_, i) => `${pageObj(i)} 0 R`).join(" ");
@@ -212,7 +227,7 @@ export function buildPdf(fixture: PdfFixture): Buffer {
       const next = i < entries.length - 1 ? ` /Next ${firstItem + i + 1} 0 R` : "";
       push(
         `<< /Title (${pdfString(entry.title)}) /Parent ${outlineRoot} 0 R` +
-          `${prev}${next} /Dest [${pageObj(entry.page)} 0 R /Fit] >>`,
+          `${prev}${next} /Dest ${entry.named === undefined ? destOf(entry) : `/${entry.named}`} >>`,
       );
     });
   }

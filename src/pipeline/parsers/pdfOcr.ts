@@ -75,14 +75,16 @@ export class PdfOcrParser implements DocumentParser {
     const labels = await doc.getPageLabels();
 
     // OCR emits no headings, so the section trail is a pure function of page
-    // index — the most recent bookmark at or before it — and can be computed
-    // up front instead of sequencing the pipeline.
+    // index and can be computed up front instead of sequencing the pipeline.
+    // A page is filed under its first bookmark (recognised lines are not
+    // placed against destinations), and later pages inherit its last.
     const byPage = await bookmarkTrails(loaded);
     const trails: string[][] = [];
     let trail: string[] = [];
     for (let i = 0; i < doc.numPages; i++) {
-      trail = byPage.get(i) ?? trail;
-      trails.push(trail);
+      const starts = byPage.get(i) ?? [];
+      trails.push(starts[0]?.trail ?? trail);
+      trail = starts.at(-1)?.trail ?? trail;
     }
 
     const release = holdOcrPool();
