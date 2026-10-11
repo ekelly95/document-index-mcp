@@ -36,6 +36,14 @@ const inputSchema = z.object({
             'and matched level by level, so "Part II" finds "Part II — Methods" but not ' +
             '"Part III — Results". Paste a section path straight from a hit to drill in.',
         ),
+      path_prefix: z
+        .string()
+        .optional()
+        .describe(
+          "Restrict to one folder (or file) of the library, as a library-relative path such " +
+            'as "NCSF" or "Papers/2025". Matched on whole path segments, so "NCSF" does not ' +
+            'reach "NCSF-old". The library listing shows each source_path.',
+        ),
       page_range: z
         .tuple([z.number().int(), z.number().int()])
         .optional()
@@ -169,6 +177,9 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
                   ...(args.filter.page_range === undefined
                     ? {}
                     : { pageRange: args.filter.page_range }),
+                  ...(args.filter.path_prefix === undefined
+                    ? {}
+                    : { pathPrefix: args.filter.path_prefix }),
                 },
               }),
         });

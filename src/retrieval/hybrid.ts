@@ -1,4 +1,4 @@
-import { byRowids, vectorsFor, type HydratedChunkRow } from "../db/chunksRepo.js";
+import { byRowids, pathPrefixClause, vectorsFor, type HydratedChunkRow } from "../db/chunksRepo.js";
 import type { Db } from "../db/sqlite.js";
 import { packVector } from "../db/sqlite.js";
 import type { Embedder } from "../embeddings/embedder.js";
@@ -75,6 +75,8 @@ export interface SearchFilter {
   kind?: ChunkKind;
   sectionPrefix?: string;
   pageRange?: [number, number];
+  /** Library-relative folder or file the search is confined to. */
+  pathPrefix?: string;
 }
 
 export interface HybridQuery {
@@ -191,6 +193,11 @@ function lexicalLeg(db: Db, q: HybridQuery, limit: number): LexicalResult {
     where.push("c.page_number BETWEEN ? AND ?");
     params.push(q.filter.pageRange[0], q.filter.pageRange[1]);
   }
+  const scope = q.filter?.pathPrefix === undefined ? null : pathPrefixClause(q.filter.pathPrefix);
+  if (scope) {
+    where.push(scope.sql);
+    params.push(...scope.params);
+  }
 
   // bm25() returns a negative score where more negative is better, so ASC.
   const rows = db
@@ -302,11 +309,14 @@ export async function hybridSearch(
   // the default reference-list exclusion all cost it candidates. The lexical
   // leg pushes everything but section_prefix (JSON, no column) into its SQL.
   const lexicalPostFiltered = q.filter?.sectionPrefix !== undefined;
+  // path_prefix is pushed into the lexical leg's SQL but, like everything but
+  // document_id, is a post-filter for the vector leg.
   const selective =
     q.filter !== undefined &&
     (q.filter.kind !== undefined ||
       q.filter.pageRange !== undefined ||
-      q.filter.sectionPrefix !== undefined);
+      q.filter.sectionPrefix !== undefined ||
+      q.filter.pathPrefix !== undefined);
   const excludesReferences = q.filter?.kind === undefined;
 
   let lexicalLimit = q.k * (lexicalPostFiltered ? POST_FILTER_OVERFETCH : PUSHED_DOWN_OVERFETCH);
@@ -413,6 +423,7 @@ function fuseAndHydrate(
       readyOnly: true,
       ...(q.filter?.kind === undefined ? { excludeKind: "references" as const } : { kind: q.filter.kind }),
       ...(q.filter?.pageRange === undefined ? {} : { pageRange: q.filter.pageRange }),
+      ...(q.filter?.pathPrefix === undefined ? {} : { pathPrefix: q.filter.pathPrefix }),
     },
   );
 

@@ -6,6 +6,7 @@ import { pruneOutline, type OutlineNode } from "../pipeline/outline.js";
 import { CONTENT_NOT_INSTRUCTIONS, FORMATS, LOCATOR_TYPES, oneLine } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 import { resolveDocumentId } from "./retired.js";
+import { pathInPrefix } from "../db/chunksRepo.js";
 import { SOURCE_STATUSES, sourceStatus } from "../library/sourceStatus.js";
 
 const inputSchema = z.object({
@@ -13,6 +14,10 @@ const inputSchema = z.object({
     .string()
     .optional()
     .describe("Omit to list every ingested document with its status"),
+  path_prefix: z
+    .string()
+    .optional()
+    .describe('With no document_id: list only one folder of the library, e.g. "NCSF"'),
   max_depth: z.number().int().min(1).max(6).default(3),
 });
 
@@ -86,7 +91,9 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
     async (args) => {
       try {
         if (!args.document_id) {
-          const docs = listDocuments(ctx.db);
+          const docs = listDocuments(ctx.db).filter(
+            (d) => args.path_prefix === undefined || pathInPrefix(d.source_path, args.path_prefix),
+          );
           const payload = {
             documents: docs.map((d) => ({
               document_id: d.id,
@@ -109,7 +116,9 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
                 "update the index. Missing files are never removed automatically; delete_document drops one.";
           const text =
             docs.length === 0
-              ? "No documents ingested yet. Use ingest_document with a path relative to the library root."
+              ? args.path_prefix === undefined
+                ? "No documents ingested yet. Use ingest_document with a path relative to the library root."
+                : `No documents under "${args.path_prefix}". Omit path_prefix to list the whole library.`
               : payload.documents
                   .map(
                     (d) =>

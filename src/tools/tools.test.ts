@@ -1084,3 +1084,29 @@ test("a source edited or removed after ingest is flagged wherever it is quoted",
 
   await call("delete_document", { document_id: id });
 });
+
+test("path_prefix scopes search and the library listing to one folder", async () => {
+  await fs.mkdir(path.join(library, "Course"), { recursive: true });
+  await fs.writeFile(
+    path.join(library, "Course", "week1.md"),
+    ["# Week 1", "", "Glycogen supercompensation follows depletion.", ""].join("\n"),
+  );
+  const id = dataOf<{ document_id: string }>(
+    await call("ingest_document", { path: "Course/week1.md" }),
+  ).document_id;
+  await waitReady([id]);
+
+  const scoped = dataOf<{ hits: { source_path: string }[] }>(
+    await call("search_document", { query: "sampling frame glycogen", filter: { path_prefix: "Course" } }),
+  );
+  // "sampling frame" matches documents elsewhere in the library; none may leak in.
+  assert.ok(scoped.hits.length > 0);
+  for (const h of scoped.hits) assert.match(h.source_path, /^Course\//);
+
+  const listing = dataOf<{ documents: { source_path: string }[] }>(
+    await call("get_document_outline", { path_prefix: "Course" }),
+  );
+  assert.deepEqual(listing.documents.map((d) => d.source_path), ["Course/week1.md"]);
+  const none = await call("get_document_outline", { path_prefix: "Nowhere" });
+  assert.match(textOf(none), /No documents under "Nowhere"/);
+});

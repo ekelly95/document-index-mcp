@@ -139,6 +139,8 @@ export interface RowidFilter {
   /** Leave this kind out; how search skips reference lists unless asked. */
   excludeKind?: ChunkKind;
   pageRange?: readonly [number, number];
+  /** Library-relative folder or file; see `pathPrefixClause`. */
+  pathPrefix?: string;
 }
 
 /**
@@ -179,6 +181,11 @@ export function byRowids(
   if (filter.pageRange) {
     where.push("c.page_number BETWEEN ? AND ?");
     params.push(filter.pageRange[0], filter.pageRange[1]);
+  }
+  const scope = filter.pathPrefix === undefined ? null : pathPrefixClause(filter.pathPrefix);
+  if (scope) {
+    where.push(scope.sql);
+    params.push(...scope.params);
   }
 
   const rows = db
@@ -227,4 +234,52 @@ export function indexCounts(db: Db): {
     fts: one("SELECT count(*) AS c FROM search_fts_docsize"),
     vectors: one("SELECT count(*) AS c FROM vec_chunks"),
   };
+}
+
+/**
+ * SQL restricting `d.source_path` to one folder (or one file) of the library.
+ *
+ * Matched on whole segments: "NCSF" holds "NCSF/protein.md" and "NCSF" itself,
+ * never "NCSF-old/x.md". substr rather than LIKE, because LIKE folds ASCII
+ * case unconditionally and Linux paths are case-sensitive; the collation
+ * decides instead, as `findStaleAtPath` does. Returns null for a prefix that
+ * names the whole library.
+ */
+export function pathPrefixClause(
+  prefix: string,
+  caseInsensitive = process.platform === "win32" || process.platform === "darwin",
+): { sql: string; params: unknown[] } | null {
+  const normalized = normalizePathPrefix(prefix);
+  if (normalized === "") return null;
+  const collate = caseInsensitive ? "NOCASE" : "BINARY";
+  const folder = `${normalized}/`;
+  return {
+    sql:
+      `(d.source_path = ? COLLATE ${collate} ` +
+      `OR substr(d.source_path, 1, ?) = ? COLLATE ${collate})`,
+    params: [normalized, folder.length, folder],
+  };
+}
+
+/** `\NCSF\Week 1\` and `./NCSF/Week 1/` are both `NCSF/Week 1`. */
+export function normalizePathPrefix(prefix: string): string {
+  return prefix
+    .replace(/\\/g, "/")
+    .replace(/^(\.\/|\/)+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\/{2,}/g, "/");
+}
+
+/** The same test as `pathPrefixClause`, for rows already in hand. */
+export function pathInPrefix(
+  sourcePath: string,
+  prefix: string,
+  caseInsensitive = process.platform === "win32" || process.platform === "darwin",
+): boolean {
+  const normalized = normalizePathPrefix(prefix);
+  if (normalized === "") return true;
+  const fold = (s: string) => (caseInsensitive ? s.toLowerCase() : s);
+  const p = fold(sourcePath);
+  const want = fold(normalized);
+  return p === want || p.startsWith(`${want}/`);
 }
