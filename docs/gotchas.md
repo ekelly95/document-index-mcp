@@ -27,6 +27,20 @@ because each one is a trap that a reasonable change would walk straight back int
   legitimately carries two rows: the old one `ready` and still answering searches, the new one
   `processing` and invisible to them. `source_path` has no `UNIQUE` constraint precisely so that
   state is representable.
+- **A byte-identical re-ingest must refresh the stat.** Drift is judged by size and mtime alone, so a
+  touched file (a sync client, an editor that rewrites on open) reads as `changed`. The re-ingest
+  that follows finds the sha already known and indexes nothing — and if that path did not write the
+  new stat (`setSourceLocation`, on both the advisory fast path and the reuse branch), the file would
+  read as `changed` forever and `pnpm sync` would re-hash it on every run.
+- **Retire, don't delete, anything that was searchable.** `retireDocument` writes the tombstones and
+  then calls `deleteDocument`. Calling `deleteDocument` directly on a `ready` document turns its
+  cited `chunk_id`s back into "unknown". `failIngest` and `deleteChunksOf` stay raw on purpose: a
+  partial ingest's chunks were never searchable, so nobody can have cited them.
+- **A retired `chunk_id` is explained, never followed.** A retired `document_id` that only scopes a
+  request is followed to its current version; a `chunk_id` (or `document_id` + `seq`) is not, because
+  the passage at the same seq in a new version may be a different passage.
+- **`pnpm rebase` needs `--db`.** The default index location is inside the library root, so a new
+  root with no `--db` would open a fresh, empty index there.
 - **Search only covers `ingest_status = 'ready'`.** A half-indexed book answering queries is
   indistinguishable from a finished one, so the lexical leg joins `documents` and the vector
   leg's candidates are filtered during hydration. `search_document` names any document still

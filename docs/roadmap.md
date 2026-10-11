@@ -3,6 +3,31 @@
 What is built, what was cut, and what is still wrong. The phase numbers record the order things were
 promised in, not the order they landed.
 
+## October 2026: identity and drift (schema v6)
+
+Prompted by [Docbank](https://github.com/kenn-io/docbank), which treats identity, verification and
+coverage as part of the record. Borrowed ideas, not code: Docbank keeps every version of the bytes,
+and this index deliberately does not — it stays derived data, rebuildable from the library.
+
+- **Retired ids explain themselves.** An edit, a delete or a rebuild used to turn every `chunk_id`
+  an agent had already cited into "unknown", indistinguishable from a typo. Retirement now leaves a
+  metadata-only tombstone (no text) naming what the id was, where it sat and which document replaced
+  it, chains collapsed so an edited-twice file points at its current version.
+- **Ids survive `pnpm reindex`.** Documents keep their `document_id`; a chunk whose text is identical
+  at the same seq keeps its `chunk_id`. On a small real library every chunk of every file still on
+  disk kept its id.
+- **Drift is reported.** Size and mtime are recorded at ingest. Search hits, passage reads and the
+  library listing carry `source_status` (present / changed / missing). `pnpm sync` catches the index
+  up and never deletes.
+- **Coverage.** `search_document` names failed documents and drifted sources alongside the
+  documents still indexing.
+- **Folder scope.** `filter.path_prefix` on search and `path_prefix` on the library listing.
+- **Root changes.** The index records its root; a library moved whole is adopted, a different root is
+  flagged, and `pnpm rebase` moves an index between roots, all or nothing.
+
+Still open: startup reconciliation of chunk / FTS / vector counts (`indexCounts()` exists and is
+called only by the CLIs), and an FTS rebuild for when they disagree.
+
 ## October 2026: a code audit
 
 A second pass, this time over the code rather than retrieval quality. Closed, each pinned by a test:
@@ -28,10 +53,7 @@ manifest; the PML book, used by no question, not refetched).
 
 Still open from it:
 
-- **Per-file drift.** An edited, moved or deleted source keeps serving its old text until re-ingested,
-  and nothing says so. The fix is a stat-only `source_status` (present / changed / missing, against a
-  size and mtime stored at ingest) or a `verify_library` tool — never automatic deletion. It needs a
-  schema bump, so it waits for the next one.
+- ~~**Per-file drift.**~~ Closed in schema v6 (see *Identity and drift* below).
 - **The tokenizer.** `@anush008/tokenizers@0.0.0` is archived upstream, and it is the dependency that
   limits installs to x64 Windows, Linux and macOS. The way out is `@huggingface/tokenizers`, or
   fastembed's own tokenizer once it exposes one; either has to reproduce the same token counts, which
