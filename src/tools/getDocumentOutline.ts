@@ -127,7 +127,8 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
                       (d.source_status === "present" ? "" : ` — source ${d.source_status}`),
                   )
                   .join("\n") + driftLine;
-          return okStructured(text, payload);
+          const rootWarning = ctx.libraryRootWarning ? `Warning: ${ctx.libraryRootWarning}\n\n` : "";
+          return okStructured(rootWarning + text, payload);
         }
 
         // A retired id is followed to its current version; the outline is
