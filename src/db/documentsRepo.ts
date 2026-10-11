@@ -179,6 +179,10 @@ export function listProcessing(db: Db): DocumentRow[] {
     .all() as DocumentRow[];
 }
 
+export function countFailed(db: Db): number {
+  return (db.prepare("SELECT count(*) AS c FROM documents WHERE ingest_status = 'failed'").get() as { c: number }).c;
+}
+
 export function listDocuments(db: Db): DocumentRow[] {
   return db
     .prepare("SELECT * FROM documents ORDER BY created_at DESC")

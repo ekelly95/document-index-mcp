@@ -6,6 +6,7 @@ import { pruneOutline, type OutlineNode } from "../pipeline/outline.js";
 import { CONTENT_NOT_INSTRUCTIONS, FORMATS, LOCATOR_TYPES, oneLine } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
 import { resolveDocumentId } from "./retired.js";
+import { SOURCE_STATUSES, sourceStatus } from "../library/sourceStatus.js";
 
 const inputSchema = z.object({
   document_id: z
@@ -47,6 +48,9 @@ const outputSchema = z.object({
           .string()
           .nullable()
           .describe("Set when known content was skipped at ingest; the index is incomplete"),
+        source_status: z
+          .enum(SOURCE_STATUSES)
+          .describe("Whether the file still matches what was indexed"),
       }),
     )
     .optional(),
@@ -93,18 +97,27 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
               chunk_count: d.chunk_count,
               locator_count: d.locator_count,
               ingest_warning: d.ingest_warning,
+              source_status: sourceStatus(ctx.config.libraryRoot, d),
             })),
           };
+          const changed = payload.documents.filter((d) => d.source_status === "changed").length;
+          const missing = payload.documents.filter((d) => d.source_status === "missing").length;
+          const driftLine =
+            changed + missing === 0
+              ? ""
+              : `\n\n${changed} changed, ${missing} missing since indexing — run \`pnpm sync\` to ` +
+                "update the index. Missing files are never removed automatically; delete_document drops one.";
           const text =
             docs.length === 0
               ? "No documents ingested yet. Use ingest_document with a path relative to the library root."
-              : docs
+              : payload.documents
                   .map(
                     (d) =>
-                      `- ${oneLine(d.title)} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
-                      (d.ingest_warning === null ? "" : " — warning: indexed incomplete"),
+                      `- ${oneLine(d.title)} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.document_id}` +
+                      (d.ingest_warning === null ? "" : " — warning: indexed incomplete") +
+                      (d.source_status === "present" ? "" : ` — source ${d.source_status}`),
                   )
-                  .join("\n");
+                  .join("\n") + driftLine;
           return okStructured(text, payload);
         }
 

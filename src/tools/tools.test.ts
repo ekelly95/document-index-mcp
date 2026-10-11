@@ -1004,3 +1004,83 @@ test("search names an unknown document_id instead of reporting no matches", asyn
   assert.equal((res as { isError?: boolean }).isError, true);
   assert.match(textOf(res), /Unknown document_id "01NOTATHING"/);
 });
+
+test("a chunk_id cited before an edit explains where it went instead of reading as unknown", async () => {
+  const file = path.join(library, "cited.md");
+  await fs.writeFile(file, ["# Cited", "", "Kestrels hover by facing into the wind.", ""].join("\n"));
+  const first = dataOf<{ document_id: string }>(await call("ingest_document", { path: "cited.md" })).document_id;
+  await waitReady([first]);
+  const hit = dataOf<{ hits: { chunk_id: string; document_id: string }[] }>(
+    await call("search_document", { query: "kestrels hover", document_id: first, k: 1 }),
+  ).hits[0]!;
+
+  await fs.writeFile(file, ["# Cited", "", "Kestrels hover by matching the wind speed.", ""].join("\n"));
+  const second = dataOf<{ document_id: string }>(await call("ingest_document", { path: "cited.md" })).document_id;
+  await waitReady([second]);
+
+  const read = await call("get_chunk_context", { chunk_id: hit.chunk_id });
+  assert.equal((read as { isError?: boolean }).isError, true);
+  assert.match(textOf(read), /earlier version of "Cited"/);
+  assert.match(textOf(read), new RegExp(second));
+
+  // The old document_id scopes a search to the current version, and says so.
+  const scoped = await call("search_document", { query: "kestrels", document_id: first });
+  assert.ok(!(scoped as { isError?: boolean }).isError);
+  assert.match(textOf(scoped), /showing the current version/);
+  for (const h of dataOf<{ hits: { document_id: string }[] }>(scoped).hits) {
+    assert.equal(h.document_id, second);
+  }
+  const outline = await call("get_document_outline", { document_id: first });
+  assert.match(textOf(outline), new RegExp(`showing the current version, ${second}`));
+});
+
+test("a deleted document's chunk_id says it was deleted", async () => {
+  await fs.writeFile(path.join(library, "doomed.md"), ["# Doomed", "", "Lemmings do not jump.", ""].join("\n"));
+  const id = dataOf<{ document_id: string }>(await call("ingest_document", { path: "doomed.md" })).document_id;
+  await waitReady([id]);
+  const chunkId = dataOf<{ hits: { chunk_id: string }[] }>(
+    await call("search_document", { query: "lemmings", document_id: id, k: 1 }),
+  ).hits[0]!.chunk_id;
+
+  await call("delete_document", { document_id: id });
+  const read = await call("get_chunk_context", { chunk_id: chunkId });
+  assert.equal((read as { isError?: boolean }).isError, true);
+  assert.match(textOf(read), /deleted from the index/);
+});
+
+test("a source edited or removed after ingest is flagged wherever it is quoted", async () => {
+  const file = path.join(library, "drifting.md");
+  await fs.writeFile(file, ["# Drifting", "", "Narwhal tusks are teeth.", ""].join("\n"));
+  const id = dataOf<{ document_id: string }>(await call("ingest_document", { path: "drifting.md" })).document_id;
+  await waitReady([id]);
+
+  type Hit = { chunk_id: string; source_status: string };
+  type Search = { hits: Hit[]; coverage: { changed_sources: { document_id: string }[]; missing_sources: { document_id: string }[] } };
+  const search = async () => call("search_document", { query: "narwhal tusks", document_id: id, k: 1 });
+
+  const fresh = dataOf<Search>(await search());
+  assert.equal(fresh.hits[0]!.source_status, "present");
+  assert.deepEqual(fresh.coverage.changed_sources, []);
+
+  await fs.appendFile(file, "\nThey sense salinity.\n");
+  const edited = await search();
+  assert.equal(dataOf<Search>(edited).hits[0]!.source_status, "changed");
+  assert.deepEqual(dataOf<Search>(edited).coverage.changed_sources.map((d) => d.document_id), [id]);
+  assert.match(textOf(edited), /has changed since it was indexed/);
+
+  const read = await call("get_chunk_context", { chunk_id: fresh.hits[0]!.chunk_id });
+  assert.equal(dataOf<{ source_status: string }>(read).source_status, "changed");
+  assert.match(textOf(read), /pnpm sync/);
+
+  await fs.rm(file);
+  const gone = dataOf<Search>(await search());
+  assert.equal(gone.hits[0]!.source_status, "missing");
+  const listing = await call("get_document_outline", {});
+  const row = dataOf<{ documents: { document_id: string; source_status: string }[] }>(listing).documents.find(
+    (d) => d.document_id === id,
+  )!;
+  assert.equal(row.source_status, "missing");
+  assert.match(textOf(listing), /missing since indexing/);
+
+  await call("delete_document", { document_id: id });
+});

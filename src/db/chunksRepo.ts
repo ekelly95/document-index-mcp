@@ -126,6 +126,9 @@ export function chunkExists(db: Db, documentId: string, seq: number): boolean {
 export interface HydratedChunkRow extends ChunkRow {
   document_title: string;
   source_path: string;
+  /** The stat recorded at ingest, for drift detection on hits. */
+  source_size: number | null;
+  source_mtime_ms: number | null;
 }
 
 /** Restrictions applied while hydrating candidates, not after. */
@@ -180,7 +183,8 @@ export function byRowids(
 
   const rows = db
     .prepare(
-      `SELECT c.*, d.title AS document_title, d.source_path AS source_path
+      `SELECT c.*, d.title AS document_title, d.source_path AS source_path,
+              d.source_size AS source_size, d.source_mtime_ms AS source_mtime_ms
          FROM document_chunks c
          JOIN documents d ON d.id = c.document_id
         WHERE ${where.join(" AND ")}`,
