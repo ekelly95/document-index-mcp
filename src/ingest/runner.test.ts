@@ -14,10 +14,16 @@ import {
   LEASE_RENEW_INTERVAL_MS,
   ingestLeaseIsLive,
   insertDocument,
+  findSupersededChunk,
+  findSupersededDocument,
+  getDocument,
   recoverInterrupted,
   renewLease,
+  retireDocument,
   type DocumentRow,
 } from "../db/documentsRepo.js";
+import { sourceStatus } from "../library/sourceStatus.js";
+import { explainRetiredChunk, resolveDocumentId } from "../tools/retired.js";
 import {
   Embedder,
   EMBEDDING_DIM,
@@ -645,4 +651,112 @@ test("ingesting a byte-identical copy says the document moved, and from where", 
   assert.equal(copy.documentId, first.documentId);
   assert.equal(copy.movedFrom, "first.md");
   assert.deepEqual(docsAtPath("first.md"), []);
+});
+
+// ---------- identity: tombstones, preserved ids, drift ----------
+
+const chunkIdsOf = (documentId: string): string[] =>
+  (db
+    .prepare("SELECT chunk_id FROM document_chunks WHERE document_id = ? ORDER BY seq")
+    .all(documentId) as { chunk_id: string }[]).map((r) => r.chunk_id);
+
+test("an edit leaves tombstones that point at the version replacing it", async () => {
+  const file = path.join(library, "draft.md");
+  await fs.writeFile(file, draft("Otters juggle pebbles."));
+  const first = await beginIngest(contextWith(stubInit()), "draft.md");
+  await first.done;
+  const cited = chunkIdsOf(first.documentId)[3]!;
+
+  await fs.writeFile(file, draft("Otters stack pebbles."));
+  const second = await beginIngest(contextWith(stubInit()), "draft.md");
+  await second.done;
+
+  const tomb = findSupersededChunk(db, cited);
+  assert.ok(tomb, "the cited chunk left no tombstone");
+  assert.equal(tomb.reason, "edited");
+  assert.equal(tomb.replaced_by, second.documentId);
+  assert.equal(tomb.seq, 3);
+  assert.match(explainRetiredChunk(db, cited)!, new RegExp(second.documentId));
+
+  // A third version: the first one's tombstones follow the chain to it.
+  await fs.writeFile(file, draft("Otters hoard pebbles."));
+  const third = await beginIngest(contextWith(stubInit()), "draft.md");
+  await third.done;
+  assert.equal(findSupersededChunk(db, cited)!.replaced_by, third.documentId);
+  assert.equal(findSupersededDocument(db, first.documentId)!.replaced_by, third.documentId);
+
+  const resolved = resolveDocumentId(db, first.documentId);
+  assert.ok(resolved.ok);
+  assert.equal(resolved.id, third.documentId);
+  assert.match(resolved.note!, /earlier version/);
+});
+
+test("a deleted document's tombstones say so, and nothing follows them", async () => {
+  await fs.writeFile(path.join(library, "gone.md"), draft("Herons wait."));
+  const handle = await beginIngest(contextWith(stubInit()), "gone.md");
+  await handle.done;
+  const cited = chunkIdsOf(handle.documentId)[0]!;
+
+  retireDocument(db, handle.documentId, null, "deleted");
+
+  assert.equal(getDocument(db, handle.documentId), undefined);
+  assert.equal(rowsOf(handle.documentId), 0);
+  assert.equal(findSupersededChunk(db, cited)!.reason, "deleted");
+  assert.match(explainRetiredChunk(db, cited)!, /deleted/);
+  assert.match(explainRetiredChunk(db, cited)!, /no current version/);
+  const resolved = resolveDocumentId(db, handle.documentId);
+  assert.ok(!resolved.ok);
+  assert.match(resolved.message, /deleted/);
+  const counts = indexCounts(db);
+  assert.equal(counts.vectors, counts.chunks);
+});
+
+test("an id that never existed is still reported unknown", () => {
+  assert.equal(explainRetiredChunk(db, "01NOPE"), null);
+  const resolved = resolveDocumentId(db, "01NOPE");
+  assert.ok(!resolved.ok);
+  assert.match(resolved.message, /Unknown document_id/);
+});
+
+test("drift: present after ingest, changed when touched or edited, missing when removed", async () => {
+  const file = path.join(library, "notes.md");
+  await fs.writeFile(file, draft("Moles tunnel."));
+  const handle = await beginIngest(contextWith(stubInit()), "notes.md");
+  await handle.done;
+  const row = () => getDocument(db, handle.documentId)!;
+  assert.equal(sourceStatus(library, row()), "present");
+
+  // A touch with identical bytes reads as changed...
+  const later = new Date(Date.now() + 60_000);
+  await fs.utimes(file, later, later);
+  assert.equal(sourceStatus(library, row()), "changed");
+  // ...until the next ingest, which re-indexes nothing and refreshes the stat.
+  const again = await beginIngest(contextWith(stubInit()), "notes.md");
+  assert.equal(again.outcome, "reused");
+  assert.equal(sourceStatus(library, row()), "present");
+
+  await fs.appendFile(file, "\nOne more line.\n");
+  assert.equal(sourceStatus(library, row()), "changed");
+
+  await fs.rm(file);
+  assert.equal(sourceStatus(library, row()), "missing");
+});
+
+test("a preferred id is used when free, and reused chunk ids are honoured", async () => {
+  await fs.writeFile(path.join(library, "kept.md"), draft("Voles burrow."));
+  const preferredId = "01KEEPTHISDOCUMENTID000000";
+  const handle = await beginIngest(contextWith(stubInit()), "kept.md", {
+    preferredId,
+    reuseChunkId: (seq) => (seq === 0 ? "01KEEPTHISCHUNKID000000000" : undefined),
+  });
+  await handle.done;
+  assert.equal(handle.documentId, preferredId);
+  assert.equal(chunkIdsOf(preferredId)[0], "01KEEPTHISCHUNKID000000000");
+  assert.notEqual(chunkIdsOf(preferredId)[1], "01KEEPTHISCHUNKID000000000");
+
+  // Taken now, so a second file asking for it gets a fresh one.
+  await fs.writeFile(path.join(library, "other.md"), draft("Shrews scurry."));
+  const other = await beginIngest(contextWith(stubInit()), "other.md", { preferredId });
+  await other.done;
+  assert.notEqual(other.documentId, preferredId);
 });

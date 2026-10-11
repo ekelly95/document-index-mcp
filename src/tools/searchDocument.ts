@@ -1,7 +1,9 @@
 import * as z from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
-import { getDocument, listProcessing } from "../db/documentsRepo.js";
+import { countFailed, listProcessing } from "../db/documentsRepo.js";
+import { SOURCE_STATUSES, sourceStatuses } from "../library/sourceStatus.js";
+import { driftCaveat, partitionDrift } from "./drift.js";
 import { assessConfidence, hybridSearch } from "../retrieval/hybrid.js";
 import {
   CHUNK_KINDS,
@@ -13,6 +15,7 @@ import {
   toChunkRef,
 } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { resolveDocumentId } from "./retired.js";
 
 const inputSchema = z.object({
   query: z.string().min(2),
@@ -32,6 +35,14 @@ const inputSchema = z.object({
           "Restrict to a branch of the heading tree. Segments are separated by › (or >) " +
             'and matched level by level, so "Part II" finds "Part II — Methods" but not ' +
             '"Part III — Results". Paste a section path straight from a hit to drill in.',
+        ),
+      path_prefix: z
+        .string()
+        .optional()
+        .describe(
+          "Restrict to one folder (or file) of the library, as a library-relative path such " +
+            'as "NCSF" or "Papers/2025". Matched on whole path segments, so "NCSF" does not ' +
+            'reach "NCSF-old". The library listing shows each source_path.',
         ),
       page_range: z
         .tuple([z.number().int(), z.number().int()])
@@ -60,6 +71,12 @@ const outputSchema = z.object({
       snippet: z
         .string()
         .describe("At most 300 chars; query terms marked with « » when the match was lexical"),
+      source_status: z
+        .enum(SOURCE_STATUSES)
+        .describe(
+          "Whether the file still matches what was indexed: 'changed' means the passage may be " +
+            "out of date, 'missing' that the file is gone",
+        ),
     }),
   ),
   confidence: z
@@ -80,6 +97,20 @@ const outputSchema = z.object({
       }),
     )
     .describe("Documents still indexing. They were NOT searched, so this result is incomplete."),
+  coverage: z
+    .object({
+      failed_documents: z
+        .number()
+        .int()
+        .describe("Documents whose last ingest failed. They were NOT searched."),
+      changed_sources: z
+        .array(z.object({ document_id: z.string(), title: z.string(), source_path: z.string() }))
+        .describe("Among the hits: files edited since indexing. Quotes from them may be stale."),
+      missing_sources: z
+        .array(z.object({ document_id: z.string(), title: z.string(), source_path: z.string() }))
+        .describe("Among the hits: files no longer on disk."),
+    })
+    .describe("What this result could not cover, or covers from out-of-date text."),
 });
 
 export function registerSearchDocument(server: McpServer, ctx: AppContext): void {
@@ -92,7 +123,9 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         "with precise locators (page or section, section path, bbox). This is the usual " +
         "starting point. It never returns full text — follow a hit with get_chunk_context " +
         "using its chunk_id to read. Check `confidence`: 'low' means the library probably " +
-        "does not cover the question. Reference lists are left out unless filter.kind is " +
+        "does not cover the question. A hit whose source_status is 'changed' or 'missing' " +
+        "comes from a file edited or removed since it was indexed, so say so before quoting it. " +
+        "Reference lists are left out unless filter.kind is " +
         "'references'. " +
         CONTENT_NOT_INSTRUCTIONS,
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -117,17 +150,20 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         }
 
         // A mistyped id is a call that cannot succeed, not a search that found
-        // nothing; "try omitting document_id" sent callers the wrong way.
-        if (args.document_id !== undefined && !getDocument(ctx.db, args.document_id)) {
-          return fail(
-            `Unknown document_id "${args.document_id}". Call get_document_outline with no ` +
-              "arguments to list the library.",
-          );
+        // nothing; "try omitting document_id" sent callers the wrong way. A
+        // retired one is followed to its current version, and the reply says so.
+        let documentId: string | undefined;
+        let redirect: string | null = null;
+        if (args.document_id !== undefined) {
+          const resolved = resolveDocumentId(ctx.db, args.document_id);
+          if (!resolved.ok) return fail(resolved.message);
+          documentId = resolved.id;
+          redirect = resolved.note;
         }
 
         const hits = await hybridSearch(ctx.db, ctx.embedder, {
           query: args.query,
-          ...(args.document_id === undefined ? {} : { documentId: args.document_id }),
+          ...(documentId === undefined ? {} : { documentId }),
           k: args.k,
           mode: args.mode,
           ...(args.filter === undefined
@@ -141,6 +177,9 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
                   ...(args.filter.page_range === undefined
                     ? {}
                     : { pageRange: args.filter.page_range }),
+                  ...(args.filter.path_prefix === undefined
+                    ? {}
+                    : { pathPrefix: args.filter.path_prefix }),
                 },
               }),
         });
@@ -151,6 +190,30 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         // cover this", which is exactly the confusion the PDF probe refuses to
         // create at ingest time.
         const processing = listProcessing(ctx.db);
+
+        // Statted per distinct document among the hits, not across the library:
+        // a search stays a few stats, and the hits are what the caller will quote.
+        const hitDocs = new Map(
+          hits.map((h) => [
+            h.row.document_id,
+            {
+              id: h.row.document_id,
+              document_id: h.row.document_id,
+              title: h.row.document_title,
+              source_path: h.row.source_path,
+              source_size: h.row.source_size,
+              source_mtime_ms: h.row.source_mtime_ms,
+            },
+          ]),
+        );
+        const statuses = sourceStatuses(ctx.config.libraryRoot, hitDocs.values());
+        const drift = partitionDrift([...hitDocs.values()], (d) => statuses.get(d.id)!);
+        const brief = (d: { document_id: string; title: string; source_path: string }) => ({
+          document_id: d.document_id,
+          title: d.title,
+          source_path: d.source_path,
+        });
+
         const payload = {
           hits: hits.map((h) => ({
             ...toChunkRef(h.row),
@@ -160,6 +223,7 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
             similarity: h.similarity === null ? null : Number(h.similarity.toFixed(3)),
             lexical_match: h.lexicalMatch,
             snippet: h.snippet,
+            source_status: statuses.get(h.row.document_id)!,
           })),
           confidence: assessConfidence(hits),
           processing_documents: processing.map((d) => ({
@@ -168,6 +232,11 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
             chunk_count: d.chunk_count,
             locator_count: d.locator_count,
           })),
+          coverage: {
+            failed_documents: countFailed(ctx.db),
+            changed_sources: drift.changed.map(brief),
+            missing_sources: drift.missing.map(brief),
+          },
         };
 
         const caveat =
@@ -181,12 +250,21 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
                     `  - "${oneLine(d.title)}" (${d.chunk_count} chunks so far, ~${d.locator_count} ${d.locator_scheme}s expected) — ${d.id}`,
                 )
                 .join("\n");
+        // A failed document is a hole in the corpus too, and a quieter one than
+        // a document still indexing, because nothing will fill it on its own.
+        const failed =
+          payload.coverage.failed_documents === 0
+            ? ""
+            : `\n\n_${payload.coverage.failed_documents} document(s) failed to index and were not ` +
+              `searched; get_document_outline lists them with the reason._`;
+        const caveats = caveat + failed + driftCaveat(drift.changed, drift.missing);
 
         if (payload.hits.length === 0) {
           return okStructured(
-            `No matches for "${args.query}".` +
+            lead(redirect) +
+              `No matches for "${args.query}".` +
               (args.document_id ? " Try omitting document_id to search the whole library." : "") +
-              caveat,
+              caveats,
             payload,
           );
         }
@@ -195,15 +273,16 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
           (h, i) =>
             `${i + 1}. ${oneLine(h.document_title)} — ${describeLocation(h)}` +
             (h.similarity === null ? "" : ` (similarity ${h.similarity.toFixed(2)})`) +
+            (h.source_status === "present" ? "" : ` [source ${h.source_status}]`) +
             `\n   ${oneLine(h.snippet)}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
         );
-        const lead =
+        const heading =
           payload.confidence === "low"
             ? `Low confidence: no passage is a strong match, so the library probably does not ` +
               `cover "${args.query}". These are the nearest ${payload.hits.length}, not an answer.`
             : `${payload.hits.length} hit(s). Read one with get_chunk_context.`;
         return okStructured(
-          `${lead}\n${QUOTED_CONTENT_NOTE}\n\n${lines.join("\n\n")}${caveat}`,
+          `${lead(redirect)}${heading}\n${QUOTED_CONTENT_NOTE}\n\n${lines.join("\n\n")}${caveats}`,
           payload,
         );
       } catch (err) {
@@ -211,4 +290,9 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
       }
     },
   );
+}
+
+/** A redirect note as a leading paragraph, or nothing. */
+function lead(note: string | null): string {
+  return note === null ? "" : `${note}\n\n`;
 }

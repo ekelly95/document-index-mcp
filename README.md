@@ -55,12 +55,25 @@ Then choose a **library root**: one folder holding the documents you want indexe
 boundary as well as a convenience — the server refuses to read anything outside it, including through
 a symlink that lexically passes but physically escapes.
 
-Pick it before you ingest anything. `source_path` is stored relative to the root and there is no
-rebase command, so moving the root later silently stops every existing row resolving.
+Pick it before you ingest anything. `source_path` is stored relative to the root. Moving the whole
+library folder, index included, needs nothing. Pointing an existing index at a *different* folder —
+the parent, a subfolder — is flagged at startup and in the library listing, and
+`pnpm rebase --library=<new root> --db=<index>` re-expresses every path against it, or refuses and
+changes nothing if a document would fall outside.
 
-The same holds file by file: the index is a snapshot. A source edited, moved or deleted after ingest
-keeps answering with the text it had, under the path it had, until it is ingested again (an edited
-file then replaces its old version). Nothing checks the files behind the listing yet.
+The index is a snapshot of each file as it was ingested, but it knows when that snapshot is stale.
+Every search hit, every passage read and every library entry carries a `source_status`: `present`,
+`changed` (edited since indexing, so a quote may be out of date) or `missing`. It is a stat
+comparison, never a re-read. To catch up:
+
+```bash
+pnpm sync --library=/path/to/your/library "Papers" --recursive
+```
+
+That re-ingests changed files (keeping their titles), retries failed ones whose file has since
+changed, ingests new files under the named folders, and lists missing ones. It never deletes:
+a missing file looks the same as an unmounted drive or a sync client mid-download, so dropping one
+is `delete_document`'s job. `--dry-run` shows the plan without changing anything.
 
 ### Register with Claude Desktop
 
@@ -122,7 +135,8 @@ directory beneath it turns one command into a multi-hour sweep that fills the in
 the main argument for a dedicated library folder rather than your home directory.
 
 After upgrading, or whenever the index format changes, rebuild it. The server refuses an index built
-by an older schema and says so; rebuilding keeps every document's title:
+by an older schema and says so; rebuilding keeps every document's title and `document_id`, and the
+`chunk_id` of every passage whose text came out the same:
 
 ```bash
 pnpm reindex --library=/path/to/your/library
@@ -179,8 +193,8 @@ The embedding model is English-only, so a multilingual library retrieves poorly.
 
 | Tool | What it does |
 |---|---|
-| `search_document` | Hybrid BM25 + semantic search. Ranked snippets with locators, each with a similarity score, plus a `confidence` that says when the library probably does not cover the question. The usual starting point. |
-| `get_document_outline` | Heading tree with chunk ranges. Also lists the library, and reports ingest progress. |
+| `search_document` | Hybrid BM25 + semantic search. Ranked snippets with locators, each with a similarity score, plus a `confidence` that says when the library probably does not cover the question, and a `coverage` block naming what was not searched or has drifted. `filter.path_prefix` confines it to one folder. The usual starting point. |
+| `get_document_outline` | Heading tree with chunk ranges. Also lists the library (or one folder of it, with `path_prefix`) with each file's `source_status`, and reports ingest progress. |
 | `get_chunk_context` | The only tool that returns body text, hard-capped at 24,000 characters. A single chunk over the cap (possible only in an index built before October 2026's fixes) is cut and marked `truncated`. |
 | `ingest_document` | Index a file. Returns immediately; indexing continues in the background. |
 | `delete_document` | Drop a document from the index. Never touches the file on disk. |
@@ -189,6 +203,14 @@ The normal workflow is three cheap steps: **`search_document`** for ranked snipp
 naming its document and locator; **`get_document_outline`** to orient inside the one that looks right,
 if needed; **`get_chunk_context`** to read the passage and its neighbours, addressed by `chunk_id`
 from the hit or `document_id` + `seq` from the outline.
+
+A `chunk_id` or `document_id` that stops resolving — the file was edited, the document deleted, the
+index rebuilt — explains itself instead of reading as unknown. The index keeps a metadata-only
+tombstone for every retired id: what it was, where it sat (page or section, seq) and which document
+replaced it. A retired `document_id` passed to `search_document` or `get_document_outline` is followed
+to the current version, and the reply says so; a retired `chunk_id` is never followed, because the
+passage at the same seq in a new version may be a different one. No old text is kept, so the index
+stays rebuildable from your files.
 
 Search never returns full document bodies. That is structural rather than conventional: the output
 schema for a search hit has no text field at all, so a refactor cannot quietly regress it.

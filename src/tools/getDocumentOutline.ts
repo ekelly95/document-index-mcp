@@ -5,12 +5,19 @@ import { getDocument, listDocuments } from "../db/documentsRepo.js";
 import { pruneOutline, type OutlineNode } from "../pipeline/outline.js";
 import { CONTENT_NOT_INSTRUCTIONS, FORMATS, LOCATOR_TYPES, oneLine } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { resolveDocumentId } from "./retired.js";
+import { pathInPrefix } from "../db/chunksRepo.js";
+import { SOURCE_STATUSES, sourceStatus } from "../library/sourceStatus.js";
 
 const inputSchema = z.object({
   document_id: z
     .string()
     .optional()
     .describe("Omit to list every ingested document with its status"),
+  path_prefix: z
+    .string()
+    .optional()
+    .describe('With no document_id: list only one folder of the library, e.g. "NCSF"'),
   max_depth: z.number().int().min(1).max(6).default(3),
 });
 
@@ -46,6 +53,9 @@ const outputSchema = z.object({
           .string()
           .nullable()
           .describe("Set when known content was skipped at ingest; the index is incomplete"),
+        source_status: z
+          .enum(SOURCE_STATUSES)
+          .describe("Whether the file still matches what was indexed"),
       }),
     )
     .optional(),
@@ -81,7 +91,9 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
     async (args) => {
       try {
         if (!args.document_id) {
-          const docs = listDocuments(ctx.db);
+          const docs = listDocuments(ctx.db).filter(
+            (d) => args.path_prefix === undefined || pathInPrefix(d.source_path, args.path_prefix),
+          );
           const payload = {
             documents: docs.map((d) => ({
               document_id: d.id,
@@ -92,22 +104,39 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
               chunk_count: d.chunk_count,
               locator_count: d.locator_count,
               ingest_warning: d.ingest_warning,
+              source_status: sourceStatus(ctx.config.libraryRoot, d),
             })),
           };
+          const changed = payload.documents.filter((d) => d.source_status === "changed").length;
+          const missing = payload.documents.filter((d) => d.source_status === "missing").length;
+          const driftLine =
+            changed + missing === 0
+              ? ""
+              : `\n\n${changed} changed, ${missing} missing since indexing — run \`pnpm sync\` to ` +
+                "update the index. Missing files are never removed automatically; delete_document drops one.";
           const text =
             docs.length === 0
-              ? "No documents ingested yet. Use ingest_document with a path relative to the library root."
-              : docs
+              ? args.path_prefix === undefined
+                ? "No documents ingested yet. Use ingest_document with a path relative to the library root."
+                : `No documents under "${args.path_prefix}". Omit path_prefix to list the whole library.`
+              : payload.documents
                   .map(
                     (d) =>
-                      `- ${oneLine(d.title)} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.id}` +
-                      (d.ingest_warning === null ? "" : " — warning: indexed incomplete"),
+                      `- ${oneLine(d.title)} (${d.source_path}) [${d.format}] ${d.ingest_status} — ${d.chunk_count} chunks — ${d.document_id}` +
+                      (d.ingest_warning === null ? "" : " — warning: indexed incomplete") +
+                      (d.source_status === "present" ? "" : ` — source ${d.source_status}`),
                   )
-                  .join("\n");
-          return okStructured(text, payload);
+                  .join("\n") + driftLine;
+          const rootWarning = ctx.libraryRootWarning ? `Warning: ${ctx.libraryRootWarning}\n\n` : "";
+          return okStructured(rootWarning + text, payload);
         }
 
-        const doc = getDocument(ctx.db, args.document_id);
+        // A retired id is followed to its current version; the outline is
+        // what the caller wanted, and the reply says whose it is.
+        const resolved = resolveDocumentId(ctx.db, args.document_id);
+        if (!resolved.ok) return fail(resolved.message);
+        const redirect = resolved.note === null ? "" : `${resolved.note}\n\n`;
+        const doc = getDocument(ctx.db, resolved.id);
         if (!doc) return fail(`Unknown document_id "${args.document_id}".`);
 
         if (doc.ingest_status !== "ready") {
@@ -123,11 +152,12 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
             entries: [],
           };
           const text =
-            doc.ingest_status === "processing"
+            redirect +
+            (doc.ingest_status === "processing"
               ? `"${oneLine(doc.title)}" is still indexing — ${doc.chunk_count} chunks so far ` +
                 `(~${doc.locator_count} ${doc.locator_scheme}s expected). Call again shortly.`
               : `"${oneLine(doc.title)}" is ${doc.ingest_status}.` +
-                (doc.error_message ? ` ${doc.error_message}` : "");
+                (doc.error_message ? ` ${doc.error_message}` : ""));
           return okStructured(text, payload);
         }
 
@@ -155,7 +185,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
             ? "(no headings detected — read from seq 0 with get_chunk_context)"
             : renderOutline(entries, 0).join("\n");
 
-        return okStructured(`${header}\n\n${body}`, payload);
+        return okStructured(`${redirect}${header}\n\n${body}`, payload);
       } catch (err) {
         return fail(`get_document_outline failed: ${describeError(err)}`);
       }

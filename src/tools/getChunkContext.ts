@@ -13,6 +13,9 @@ import {
   toChunkRef,
 } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { explainRetiredChunk, explainRetiredDocument } from "./retired.js";
+import { SOURCE_STATUSES, sourceStatus } from "../library/sourceStatus.js";
+import { driftCaveat } from "./drift.js";
 
 /**
  * The only tool that returns body text, and the reason whole-document dumps
@@ -33,6 +36,9 @@ const outputSchema = z.object({
   document_id: z.string(),
   document_title: z.string().describe("Title of the source document"),
   source_path: z.string().describe("Library-relative path of the source file"),
+  source_status: z
+    .enum(SOURCE_STATUSES)
+    .describe("'changed' or 'missing' means the file no longer matches this text; say so before quoting"),
   chunks: z.array(
     ChunkRefShape.extend({
       text: z.string(),
@@ -71,6 +77,13 @@ export function registerGetChunkContext(server: McpServer, ctx: AppContext): voi
           ? byChunkId(ctx.db, args.chunk_id)
           : bySeq(ctx.db, args.document_id!, args.seq!);
         if (!anchor) {
+          // A retired id is explained rather than reported unknown, and never
+          // silently followed: seq numbers can shift between versions, so the
+          // passage at the same seq in the replacement may be a different one.
+          const retired = args.chunk_id
+            ? explainRetiredChunk(ctx.db, args.chunk_id)
+            : explainRetiredDocument(ctx.db, args.document_id!);
+          if (retired) return fail(retired);
           return fail(
             args.chunk_id
               ? `Unknown chunk_id "${args.chunk_id}".`
@@ -117,6 +130,7 @@ export function registerGetChunkContext(server: McpServer, ctx: AppContext): voi
           document_id: anchor.document_id,
           document_title: doc.title,
           source_path: doc.source_path,
+          source_status: sourceStatus(ctx.config.libraryRoot, doc),
           chunks: rows.map((r) =>
             anchorTruncated
               ? { ...toChunkRef(r), text: cutAt(r.text, MAX_TOTAL_CHARS), truncated: true }
@@ -167,7 +181,16 @@ function render(payload: z.infer<typeof outputSchema>): string {
   if (payload.has_more_after && last) hints.push(`later: seq ${last.seq + 1}`);
 
   const body = parts.join("\n\n---\n\n");
+  const self = {
+    document_id: payload.document_id,
+    title: payload.document_title,
+    source_path: payload.source_path,
+  };
+  const drift = driftCaveat(
+    payload.source_status === "changed" ? [self] : [],
+    payload.source_status === "missing" ? [self] : [],
+  );
   return hints.length > 0
-    ? `${header}\n\n${body}\n\n_(more available — ${hints.join(", ")})_`
-    : `${header}\n\n${body}`;
+    ? `${header}\n\n${body}\n\n_(more available — ${hints.join(", ")})_${drift}`
+    : `${header}\n\n${body}${drift}`;
 }

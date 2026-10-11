@@ -9,6 +9,7 @@ import {
 import { createIngestQueue, type IngestQueue } from "./ingest/queue.js";
 import { recoverInterrupted } from "./db/documentsRepo.js";
 import { log } from "./log.js";
+import { checkLibraryRoot } from "./library/root.js";
 import { redactPathsInReplies } from "./tools/result.js";
 import {
   Embedder,
@@ -32,6 +33,12 @@ export interface AppContext {
    * fully capable server otherwise — same database, same tools, same writes.
    */
   primary: boolean;
+  /**
+   * Set when the index was built for a different library root and its paths
+   * do not resolve under this one. The library listing repeats it, because a
+   * stderr warning under a GUI host is a warning nobody reads.
+   */
+  libraryRootWarning?: string | null;
 }
 
 export interface ContextOptions {
@@ -109,6 +116,11 @@ export function createContext(
     if (recovered > 0) log.warn(`reset ${recovered} interrupted ingest(s) to failed`);
   }
 
+  // After recovery, and in every process: the check only writes meta when
+  // the root is new or the library moved whole, and both writes are idempotent.
+  const root = checkLibraryRoot(db, config.libraryRoot);
+  if (root.status === "mismatch") log.warn(root.message);
+
   return {
     config,
     db,
@@ -116,5 +128,6 @@ export function createContext(
     queue: createIngestQueue(config.ingestConcurrency),
     lock: lock ?? NO_LOCK,
     primary: lock !== null,
+    libraryRootWarning: root.status === "mismatch" ? root.message : null,
   };
 }

@@ -8,6 +8,29 @@ changes.
 
 ## Unreleased
 
+### Identity and drift (schema v6)
+
+The index format changed: run `pnpm reindex` once. From then on a rebuild keeps
+document_ids, and the chunk_id of every passage whose text is unchanged.
+
+- **Retired ids explain themselves.** A `chunk_id` or `document_id` from an
+  edited, deleted or rebuilt document says what it was, where it sat and which
+  document replaced it, instead of reading as unknown. A retired `document_id`
+  is followed to the current version by `search_document` and
+  `get_document_outline`.
+- **Source drift is reported.** Search hits, `get_chunk_context` and the
+  library listing carry `source_status` (`present` / `changed` / `missing`).
+  `search_document` gains a `coverage` block naming failed documents and
+  drifted sources.
+- **`pnpm sync`** re-ingests changed files, retries failed ones whose file has
+  changed, ingests new files under named folders, and lists missing ones
+  without deleting them. `--dry-run` shows the plan.
+- **Folder scope:** `filter.path_prefix` on `search_document`, `path_prefix`
+  on the library listing.
+- **Library root:** recorded in the index. A library moved whole is adopted; a
+  different root is flagged. `pnpm rebase` moves an index between roots, all
+  or nothing.
+
 ### October 2026 code audit
 
 Fixes to chunking and PDF structure apply to documents indexed after them:

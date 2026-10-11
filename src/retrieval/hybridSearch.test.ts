@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FlagEmbedding } from "fastembed";
 import { openDatabase, type Db } from "../db/sqlite.js";
-import { insertChunks } from "../db/chunksRepo.js";
+import { insertChunks, normalizePathPrefix, pathInPrefix } from "../db/chunksRepo.js";
 import { insertDocument, finalizeDocument } from "../db/documentsRepo.js";
 import {
   Embedder,
@@ -316,4 +316,45 @@ test("confidence follows the best similarity, and is unknown without one", () =>
   assert.equal(assessConfidence([hit(0.3), hit(CONFIDENT_SIMILARITY - 0.01)]), "low");
   assert.equal(assessConfidence([hit(null)]), null);
   assert.equal(assessConfidence([]), "low");
+});
+
+test("path_prefix confines both legs to one folder, on whole segments", async () => {
+  seed("NCSF/protein", [{ text: "badgers rank01" }]);
+  seed("NCSF-old/protein", [{ text: "badgers rank02" }]);
+  seed("Papers/sleep", [{ text: "badgers rank03" }]);
+
+  for (const mode of ["hybrid", "lexical", "semantic"] as const) {
+    for (const prefix of ["NCSF", "NCSF/", "./NCSF", "NCSF\\"]) {
+      const hits = await search({ query: "badgers", k: 10, mode, filter: { pathPrefix: prefix } });
+      assert.deepEqual(
+        hits.map((h) => h.row.source_path),
+        ["NCSF/protein.md"],
+        `${mode} with "${prefix}" leaked outside the folder`,
+      );
+    }
+  }
+  // A file path is a prefix of itself.
+  const one = await search({ query: "badgers", k: 10, mode: "hybrid", filter: { pathPrefix: "Papers/sleep.md" } });
+  assert.deepEqual(textsOf(one), ["badgers rank03"]);
+  // An empty prefix is the whole library.
+  const all = await search({ query: "badgers", k: 10, mode: "hybrid", filter: { pathPrefix: "/" } });
+  assert.equal(all.length, 3);
+});
+
+test("path_prefix follows the filesystem's case rule", () => {
+  assert.equal(pathInPrefix("NCSF/protein.md", "ncsf", true), true);
+  assert.equal(pathInPrefix("NCSF/protein.md", "ncsf", false), false);
+  assert.equal(pathInPrefix("NCSF-old/x.md", "NCSF", true), false);
+  assert.equal(normalizePathPrefix("\\NCSF\\Week 1\\"), "NCSF/Week 1");
+});
+
+test("path_prefix still fills k when the folder is a small part of the library", async () => {
+  // Thirty decoys rank above every in-folder chunk, so a net sized for an
+  // unfiltered search holds none of the folder's chunks: either a wider first
+  // net (path_prefix counts as selective) or escalation has to reach them.
+  seed("Decoys/many", Array.from({ length: 30 }, (_, i) => ({ text: `badgers rank${String(i + 1).padStart(2, "0")}` })));
+  seed("NCSF/few", [{ text: "badgers rank40" }, { text: "badgers rank41" }, { text: "badgers rank42" }]);
+  const hits = await search({ query: "badgers", k: 3, mode: "semantic", filter: { pathPrefix: "NCSF" } });
+  assert.equal(hits.length, 3);
+  for (const h of hits) assert.equal(h.row.source_path, "NCSF/few.md");
 });

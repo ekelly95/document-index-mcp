@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { ulid } from "ulid";
 import type { AppContext } from "../context.js";
 import {
   deleteChunksOf,
-  deleteDocument,
   failIngest,
   finalizeDocument,
   findBySha256,
@@ -14,9 +14,11 @@ import {
   LEASE_RENEW_INTERVAL_MS,
   renewLease,
   restartIngest,
+  retireDocument,
   setChunkCount,
-  setSourcePath,
+  setSourceLocation,
   type DocumentRow,
+  type SourceStat,
 } from "../db/documentsRepo.js";
 import { insertChunks, type InsertableChunk } from "../db/chunksRepo.js";
 import { EMBEDDING_MODEL_NAME } from "../embeddings/embedder.js";
@@ -123,6 +125,33 @@ function sha256Of(bytes: Uint8Array): string {
 }
 
 /**
+ * Size and truncated mtime, taken BEFORE the bytes are read. A write landing
+ * between this and the read leaves a stat older than the content, which can
+ * only make the file look changed later — a spurious re-ingest, never a missed
+ * one.
+ */
+async function statOf(absPath: string): Promise<SourceStat> {
+  const st = await fs.stat(absPath);
+  return { size: st.size, mtimeMs: Math.trunc(st.mtimeMs) };
+}
+
+export interface BeginIngestOptions {
+  title?: string;
+  /**
+   * The document_id to use if this ingest creates a new row and the id is
+   * free. `pnpm reindex` passes the old index's id, so a rebuild does not
+   * invalidate every document_id an agent has already been given.
+   */
+  preferredId?: string;
+  /**
+   * Called for each chunk as it is written; a returned id is used instead of a
+   * fresh ULID. `pnpm reindex` returns the old chunk_id when the chunk at that
+   * seq has identical text, so unchanged citations survive a rebuild.
+   */
+  reuseChunkId?: (seq: number, text: string) => string | undefined;
+}
+
+/**
  * Prepare an ingest and start it. Everything up to the `documents` row write is
  * awaited, so the caller gets a real document_id; parse, chunk, embed and insert
  * run behind the returned `done`. Progress is chunk_count against locator_count,
@@ -143,7 +172,7 @@ function sha256Of(bytes: Uint8Array): string {
 export async function beginIngest(
   ctx: AppContext,
   relPath: string,
-  opts: { title?: string } = {},
+  opts: BeginIngestOptions = {},
 ): Promise<IngestHandle> {
   if (draining) {
     throw new ShuttingDownError(
@@ -156,6 +185,7 @@ export async function beginIngest(
   // on Windows rather than two documents that supersede nothing.
   const absPath = await assertRealPathInside(ctx.config.libraryRoot, requested);
   const sourcePath = libraryRelative(ctx.config.libraryRoot, absPath);
+  const sourceStat = await statOf(absPath);
 
   // Read once. Everything after this point — the hash, the format sniff, the
   // PDF probe, the metadata pass and the parse — works from this one buffer
@@ -173,7 +203,12 @@ export async function beginIngest(
     // row to update and the transaction is where writes belong.
     const known = findBySha256(ctx.db, sha256);
     if (known && known.source_path === sourcePath) {
-      if (known.ingest_status === "ready") return settled(known, "reused");
+      if (known.ingest_status === "ready") {
+        // Same bytes, same path: only the stat can have moved (a touch, a
+        // copy-over). Refreshed, or the file reads as changed forever.
+        setSourceLocation(ctx.db, known.id, sourcePath, sourceStat);
+        return settled(known, "reused");
+      }
       if (known.ingest_status === "processing" && ingestLeaseIsLive(known)) {
         return settled(known, "joined");
       }
@@ -206,11 +241,22 @@ export async function beginIngest(
       title,
       route,
       meta,
+      sourceStat,
+      ...(opts.preferredId === undefined ? {} : { preferredId: opts.preferredId }),
     });
     if (claim.outcome !== "started") return { ...claim, done: Promise.resolve() };
 
     const documentId = claim.documentId;
-    const done = indexInBackground(ctx, documentId, claim.title, src, route, meta, supersede);
+    const done = indexInBackground(
+      ctx,
+      documentId,
+      claim.title,
+      src,
+      route,
+      meta,
+      supersede,
+      opts.reuseChunkId,
+    );
     // From here the background work owns the source and closes it; this
     // function's own cleanup must not.
     handedOff = true;
@@ -242,6 +288,7 @@ function indexInBackground(
   route: Route,
   meta: DocumentMetadata,
   supersede: readonly string[],
+  reuseChunkId: BeginIngestOptions["reuseChunkId"],
 ): Promise<void> {
   // The queue, not the document lock, is what bounds cost here: the lock only
   // stops two writers for the SAME document, and the expensive resources —
@@ -261,7 +308,16 @@ function indexInBackground(
           (supersede.length > 0 ? `, superseding ${supersede.join(", ")}` : ""),
       );
       try {
-        const chunks = await indexDocument(ctx, documentId, title, src, route, meta, supersede);
+        const chunks = await indexDocument(
+          ctx,
+          documentId,
+          title,
+          src,
+          route,
+          meta,
+          supersede,
+          reuseChunkId,
+        );
         log.info(
           `indexed ${chunks} chunk(s) in ${((Date.now() - started) / 1000).toFixed(1)}s ` +
             `[${documentId}]` +
@@ -328,9 +384,11 @@ function claimForIngest(
     title: string;
     route: Route;
     meta: DocumentMetadata;
+    sourceStat: SourceStat;
+    preferredId?: string;
   },
 ): ClaimResult {
-  const { sha256, sourcePath, title, route, meta } = input;
+  const { sha256, sourcePath, title, route, meta, sourceStat } = input;
 
   return ctx.db.transaction((): ClaimResult => {
     const existing = findBySha256(ctx.db, sha256);
@@ -364,11 +422,11 @@ function claimForIngest(
     if (existing?.ingest_status === "ready") {
       // Identical bytes are the same document wherever they live; a renamed or
       // copied file only needs its path updated. Evicted eagerly here because nothing
-      // is indexed, so there is no later failure to survive. deleteDocument, not a
-      // raw DELETE: no cascade reaches the vec0 table.
-      for (const id of staleIds) deleteDocument(ctx.db, id);
+      // is indexed, so there is no later failure to survive. Retired rather than
+      // deleted, so the evicted version's citations point at this one.
+      for (const id of staleIds) retireDocument(ctx.db, id, existing.id, "edited");
       const moved = existing.source_path !== sourcePath;
-      if (moved) setSourcePath(ctx.db, existing.id, sourcePath);
+      setSourceLocation(ctx.db, existing.id, sourcePath, sourceStat);
       return {
         claim: { ...claimOf(existing, "reused"), movedFrom: moved ? existing.source_path : null },
         supersede: [],
@@ -384,6 +442,7 @@ function claimForIngest(
       locatorCount: meta.locatorCount,
       embeddingModel: EMBEDDING_MODEL_NAME,
       ingestWarning: meta.warning ?? null,
+      sourceStat,
     };
 
     if (existing) {
@@ -405,7 +464,16 @@ function claimForIngest(
       };
     }
 
-    const documentId = ulid();
+    // A preferred id is honoured only while nothing — live or retired — holds
+    // it, so it can never collide with a document or contradict a tombstone.
+    const preferredFree =
+      input.preferredId !== undefined &&
+      !ctx.db
+        .prepare(
+          "SELECT 1 FROM documents WHERE id = ? UNION ALL SELECT 1 FROM superseded_documents WHERE id = ?",
+        )
+        .get(input.preferredId, input.preferredId);
+    const documentId = preferredFree ? input.preferredId! : ulid();
     insertDocument(ctx.db, { id: documentId, sha256, ...fields });
     return {
       claim: {
@@ -442,6 +510,7 @@ async function indexDocument(
   route: Route,
   meta: DocumentMetadata,
   supersede: readonly string[],
+  reuseChunkId?: BeginIngestOptions["reuseChunkId"],
 ): Promise<number> {
   const outline = new OutlineBuilder();
   const locators = new Set<string>();
@@ -459,7 +528,7 @@ async function indexDocument(
     );
 
     const rows: InsertableChunk[] = batch.map((chunk, i) => ({
-      chunkId: ulid(),
+      chunkId: reuseChunkId?.(seq - batch.length + i, chunk.text) ?? ulid(),
       seq: seq - batch.length + i,
       kind: chunk.kind,
       locator: chunk.locator,

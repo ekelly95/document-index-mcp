@@ -19,7 +19,10 @@
 // v5: kind admits 'references' (reference lists, excluded from search by
 // default), and the CHECKs drop the epub/pptx/html formats and part/slide
 // locators whose readers were removed.
-export const SCHEMA_VERSION = 5;
+// v6: source_size / source_mtime_ms for drift detection, and the
+// superseded_documents / superseded_chunks tombstones that let a retired id
+// explain itself instead of answering "unknown".
+export const SCHEMA_VERSION = 6;
 
 export const SCHEMA_SQL = `
 -- ---------- meta ----------
@@ -51,6 +54,8 @@ CREATE TABLE IF NOT EXISTS documents (
                     CHECK (ingest_status IN ('pending','processing','ready','failed')),
   error_message   TEXT,
   ingest_warning  TEXT,                             -- content known skipped: pages that yielded no text (ParseReport, ir.ts), set when the document is finalised
+  source_size     INTEGER,                          -- bytes, stat'd at ingest; drift detection (library/sourceStatus.ts)
+  source_mtime_ms INTEGER,                          -- truncated mtimeMs, stat'd at ingest
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -105,6 +110,36 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF text ON document_chunks B
   INSERT INTO search_fts(search_fts, rowid, text) VALUES ('delete', old.id, old.text);
   INSERT INTO search_fts(rowid, text) VALUES (new.id, new.text);
 END;
+
+-- ---------- 3b) tombstones ----------
+-- What a retired id was, so a citation made before an edit, a delete or a
+-- reindex fails with an explanation rather than "unknown". No text is kept:
+-- the index stays derived data, rebuildable from the library. replaced_by is
+-- the CURRENT document for that path (chains are collapsed on every
+-- retirement), or NULL when the document was deleted.
+CREATE TABLE IF NOT EXISTS superseded_documents (
+  id              TEXT PRIMARY KEY,
+  title           TEXT NOT NULL,
+  source_path     TEXT NOT NULL,
+  replaced_by     TEXT,
+  reason          TEXT NOT NULL CHECK (reason IN ('edited','reindexed','deleted')),
+  superseded_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_superseded_documents_replaced_by ON superseded_documents(replaced_by);
+
+CREATE TABLE IF NOT EXISTS superseded_chunks (
+  chunk_id        TEXT PRIMARY KEY,
+  document_id     TEXT NOT NULL,                    -- the version it belonged to, now retired
+  seq             INTEGER NOT NULL,
+  locator_type    TEXT NOT NULL,
+  locator_value   TEXT NOT NULL,
+  page_number     INTEGER,
+  printed_label   TEXT,
+  replaced_by     TEXT,
+  reason          TEXT NOT NULL CHECK (reason IN ('edited','reindexed','deleted')),
+  superseded_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_superseded_chunks_replaced_by ON superseded_chunks(replaced_by);
 
 -- ---------- 4) vector index (sqlite-vec) ----------
 -- 384-dim bge-small-en-v1.5, keyed to document_chunks.id, partitioned per
