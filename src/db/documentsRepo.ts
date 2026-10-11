@@ -19,8 +19,19 @@ export interface DocumentRow {
   ingest_status: IngestStatus;
   error_message: string | null;
   ingest_warning: string | null;
+  source_size: number | null;
+  source_mtime_ms: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * What the file looked like when it was read for this index: size and
+ * truncated mtime. Compared, never hashed, by `library/sourceStatus.ts`.
+ */
+export interface SourceStat {
+  size: number;
+  mtimeMs: number;
 }
 
 export interface NewDocument {
@@ -34,6 +45,7 @@ export interface NewDocument {
   locatorCount: number;
   embeddingModel: string;
   ingestWarning: string | null;
+  sourceStat?: SourceStat | null;
 }
 
 const now = () => new Date().toISOString();
@@ -43,8 +55,9 @@ export function insertDocument(db: Db, doc: NewDocument): void {
     `INSERT INTO documents (
        id, title, source_path, format, sha256, engine_used, locator_scheme,
        locator_count, chunk_count, embedding_model, outline_json,
-       ingest_status, ingest_warning, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, '[]', 'processing', ?, ?, ?)`,
+       ingest_status, ingest_warning, source_size, source_mtime_ms,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, '[]', 'processing', ?, ?, ?, ?, ?)`,
   ).run(
     doc.id,
     doc.title,
@@ -56,6 +69,8 @@ export function insertDocument(db: Db, doc: NewDocument): void {
     doc.locatorCount,
     doc.embeddingModel,
     doc.ingestWarning,
+    doc.sourceStat?.size ?? null,
+    doc.sourceStat?.mtimeMs ?? null,
     now(),
     now(),
   );
@@ -107,6 +122,7 @@ export function restartIngest(
     locatorCount: number;
     embeddingModel: string;
     ingestWarning: string | null;
+    sourceStat?: SourceStat | null;
   },
 ): void {
   db.prepare(
@@ -114,7 +130,7 @@ export function restartIngest(
         SET ingest_status = 'processing', error_message = NULL,
             title = ?, source_path = ?, format = ?, engine_used = ?,
             locator_scheme = ?, locator_count = ?, embedding_model = ?,
-            ingest_warning = ?,
+            ingest_warning = ?, source_size = ?, source_mtime_ms = ?,
             chunk_count = 0, outline_json = '[]', updated_at = ?
       WHERE id = ?`,
   ).run(
@@ -126,22 +142,34 @@ export function restartIngest(
     fields.locatorCount,
     fields.embeddingModel,
     fields.ingestWarning,
+    fields.sourceStat?.size ?? null,
+    fields.sourceStat?.mtimeMs ?? null,
     now(),
     id,
   );
 }
 
 /**
- * Move a ready document to a new library path without touching its content.
+ * Record where a ready document lives and what its file looks like now,
+ * without touching its content.
  *
  * A file that was renamed or copied has the same sha256, so it is the same
  * document; only where it lives changed. Re-indexing identical bytes would be
- * pure waste, and `sha256 UNIQUE` forbids a second copy anyway.
+ * pure waste, and `sha256 UNIQUE` forbids a second copy anyway. The stat is
+ * refreshed on the same path too: a file touched without changing its bytes
+ * would otherwise read as "changed" forever, and `pnpm sync` would re-hash it
+ * on every run.
  */
-export function setSourcePath(db: Db, id: string, sourcePath: string): void {
+export function setSourceLocation(
+  db: Db,
+  id: string,
+  sourcePath: string,
+  stat: SourceStat | null,
+): void {
   db.prepare(
-    "UPDATE documents SET source_path = ?, updated_at = ? WHERE id = ?",
-  ).run(sourcePath, now(), id);
+    `UPDATE documents SET source_path = ?, source_size = ?, source_mtime_ms = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(sourcePath, stat?.size ?? null, stat?.mtimeMs ?? null, now(), id);
 }
 
 /** Documents currently being indexed. Their chunks are deliberately unsearchable. */
@@ -203,7 +231,7 @@ export function finalizeDocument(
   supersede: readonly string[] = [],
 ): void {
   db.transaction(() => {
-    for (const staleId of supersede) deleteDocument(db, staleId);
+    for (const staleId of supersede) retireDocument(db, staleId, id, "edited");
     db.prepare(
       `UPDATE documents
           SET chunk_count = ?, locator_count = ?, outline_json = ?,
@@ -243,6 +271,112 @@ export function deleteDocument(db: Db, id: string): void {
     db.prepare("DELETE FROM vec_chunks WHERE document_id = ?").run(docId);
     db.prepare("DELETE FROM documents WHERE id = ?").run(docId);
   })(id);
+}
+
+export type RetireReason = "edited" | "reindexed" | "deleted";
+
+export interface SupersededDocumentRow {
+  id: string;
+  title: string;
+  source_path: string;
+  replaced_by: string | null;
+  reason: RetireReason;
+  superseded_at: string;
+}
+
+export interface SupersededChunkRow {
+  chunk_id: string;
+  document_id: string;
+  seq: number;
+  locator_type: LocatorType;
+  locator_value: string;
+  page_number: number | null;
+  printed_label: string | null;
+  replaced_by: string | null;
+  reason: RetireReason;
+  superseded_at: string;
+}
+
+/**
+ * Delete a document, leaving tombstones for it and its chunks, in one
+ * transaction.
+ *
+ * A chunk_id an agent quoted yesterday must not come back as "unknown" today:
+ * that reads the same as a typo. The tombstone says what it was, where it sat,
+ * and which document replaced it. No text is kept — the index stays derived
+ * data — so a retired passage can be explained but not read.
+ *
+ * Chains collapse here: anything that pointed at `id` now points at
+ * `replacedBy`, so a file edited twice still answers with its current version.
+ *
+ * Only for documents whose chunks were searchable. A failed or interrupted
+ * ingest's partial chunks were never citable and go via `failIngest`.
+ */
+export function retireDocument(
+  db: Db,
+  id: string,
+  replacedBy: string | null,
+  reason: RetireReason,
+): void {
+  db.transaction(() => {
+    const doc = getDocument(db, id);
+    if (!doc) return;
+    const at = now();
+    db.prepare(
+      `INSERT OR REPLACE INTO superseded_chunks (
+         chunk_id, document_id, seq, locator_type, locator_value, page_number,
+         printed_label, replaced_by, reason, superseded_at
+       )
+       SELECT chunk_id, document_id, seq, locator_type, locator_value, page_number,
+              printed_label, ?, ?, ?
+         FROM document_chunks WHERE document_id = ?`,
+    ).run(replacedBy, reason, at, id);
+    db.prepare(
+      `INSERT OR REPLACE INTO superseded_documents (id, title, source_path, replaced_by, reason, superseded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, doc.title, doc.source_path, replacedBy, reason, at);
+    db.prepare("UPDATE superseded_documents SET replaced_by = ? WHERE replaced_by = ?").run(replacedBy, id);
+    db.prepare("UPDATE superseded_chunks SET replaced_by = ? WHERE replaced_by = ?").run(replacedBy, id);
+    deleteDocument(db, id);
+  })();
+}
+
+/**
+ * Write tombstones directly, for ids retired outside `retireDocument`: the
+ * rebuild in `pnpm reindex`, which carries an old index's tombstones across and
+ * adds its own. Existing rows for the same id are replaced.
+ */
+export function insertTombstones(
+  db: Db,
+  rows: { documents: readonly SupersededDocumentRow[]; chunks: readonly SupersededChunkRow[] },
+): void {
+  const doc = db.prepare(
+    `INSERT OR REPLACE INTO superseded_documents (id, title, source_path, replaced_by, reason, superseded_at)
+     VALUES (@id, @title, @source_path, @replaced_by, @reason, @superseded_at)`,
+  );
+  const chunk = db.prepare(
+    `INSERT OR REPLACE INTO superseded_chunks (
+       chunk_id, document_id, seq, locator_type, locator_value, page_number,
+       printed_label, replaced_by, reason, superseded_at
+     ) VALUES (@chunk_id, @document_id, @seq, @locator_type, @locator_value, @page_number,
+               @printed_label, @replaced_by, @reason, @superseded_at)`,
+  );
+  db.transaction(() => {
+    for (const r of rows.documents) doc.run(r);
+    for (const r of rows.chunks) chunk.run(r);
+  })();
+}
+
+export function findSupersededDocument(db: Db, id: string): SupersededDocumentRow | undefined {
+  return db.prepare("SELECT * FROM superseded_documents WHERE id = ?").get(id) as
+    | SupersededDocumentRow
+    | undefined;
+}
+
+export function findSupersededChunk(db: Db, chunkId: string): SupersededChunkRow | undefined {
+  return db.prepare("SELECT * FROM superseded_chunks WHERE chunk_id = ?").get(chunkId) as
+    | SupersededChunkRow
+    | undefined;
 }
 
 /**

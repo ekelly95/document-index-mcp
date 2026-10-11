@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { moveAside, readOldIndex } from "./oldIndex.js";
+import { moveAside, readOldCitations, readOldIndex, tombstonesAfterRebuild } from "./oldIndex.js";
 
 /** What `pnpm reindex` carries over from the index it replaces, and how it gets that index out of the way. */
 
@@ -67,4 +67,48 @@ test("the old index moves aside with its -wal and -shm, never over an earlier ba
   assert.equal(second, `${dbPath}.v4.1234.bak`);
   assert.equal(fs.readFileSync(first, "utf8"), "first", "the earlier backup was overwritten");
   assert.equal(fs.readFileSync(second, "utf8"), "second");
+});
+
+test("a rebuild keeps reused chunk ids live and tombstones the rest", () => {
+  const at = "2026-10-11T00:00:00.000Z";
+  const citations = {
+    chunks: [
+      { chunk_id: "c-kept", document_id: "d1", seq: 0, locator_type: "section", locator_value: "sec-1", page_number: null, printed_label: null, text_hash: "h" },
+      { chunk_id: "c-changed", document_id: "d1", seq: 1, locator_type: "section", locator_value: "sec-2", page_number: null, printed_label: null, text_hash: "h" },
+      { chunk_id: "c-lost", document_id: "d2", seq: 0, locator_type: "page", locator_value: "1", page_number: 1, printed_label: null, text_hash: "h" },
+    ],
+    supersededDocuments: [
+      { id: "d0", title: "Older", source_path: "a.md", replaced_by: "d1", reason: "edited" as const, superseded_at: at },
+    ],
+    supersededChunks: [
+      { chunk_id: "c-ancient", document_id: "d0", seq: 0, locator_type: "section" as const, locator_value: "sec-1", page_number: null, printed_label: null, replaced_by: "d1", reason: "edited" as const, superseded_at: at },
+    ],
+  };
+  const documents = [
+    { id: "d1", title: "A", source_path: "a.md" },
+    { id: "d2", title: "B", source_path: "b.pdf" },
+  ];
+  const out = tombstonesAfterRebuild(
+    citations,
+    documents,
+    new Map([["d1", "d1"], ["d2", null]]),
+    new Set(["c-kept"]),
+    at,
+  );
+
+  assert.deepEqual(out.chunks.map((c) => [c.chunk_id, c.replaced_by, c.reason]), [
+    ["c-ancient", "d1", "edited"],
+    ["c-changed", "d1", "reindexed"],
+    ["c-lost", null, "reindexed"],
+  ]);
+  // d1 kept its id and is live, so only the failed d2 needs explaining.
+  assert.deepEqual(out.documents.map((d) => [d.id, d.replaced_by, d.reason]), [
+    ["d0", "d1", "edited"],
+    ["d2", null, "reindexed"],
+  ]);
+});
+
+test("an index too old to hold chunk ids yields no citations", () => {
+  oldIndex([{ title: "T", source_path: "x.md", ingest_status: "ready" }]);
+  assert.deepEqual(readOldCitations(dbPath), { chunks: [], supersededDocuments: [], supersededChunks: [] });
 });

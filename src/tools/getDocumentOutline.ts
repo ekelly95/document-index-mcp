@@ -5,6 +5,7 @@ import { getDocument, listDocuments } from "../db/documentsRepo.js";
 import { pruneOutline, type OutlineNode } from "../pipeline/outline.js";
 import { CONTENT_NOT_INSTRUCTIONS, FORMATS, LOCATOR_TYPES, oneLine } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { resolveDocumentId } from "./retired.js";
 
 const inputSchema = z.object({
   document_id: z
@@ -107,7 +108,12 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
           return okStructured(text, payload);
         }
 
-        const doc = getDocument(ctx.db, args.document_id);
+        // A retired id is followed to its current version; the outline is
+        // what the caller wanted, and the reply says whose it is.
+        const resolved = resolveDocumentId(ctx.db, args.document_id);
+        if (!resolved.ok) return fail(resolved.message);
+        const redirect = resolved.note === null ? "" : `${resolved.note}\n\n`;
+        const doc = getDocument(ctx.db, resolved.id);
         if (!doc) return fail(`Unknown document_id "${args.document_id}".`);
 
         if (doc.ingest_status !== "ready") {
@@ -123,11 +129,12 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
             entries: [],
           };
           const text =
-            doc.ingest_status === "processing"
+            redirect +
+            (doc.ingest_status === "processing"
               ? `"${oneLine(doc.title)}" is still indexing — ${doc.chunk_count} chunks so far ` +
                 `(~${doc.locator_count} ${doc.locator_scheme}s expected). Call again shortly.`
               : `"${oneLine(doc.title)}" is ${doc.ingest_status}.` +
-                (doc.error_message ? ` ${doc.error_message}` : "");
+                (doc.error_message ? ` ${doc.error_message}` : ""));
           return okStructured(text, payload);
         }
 
@@ -155,7 +162,7 @@ export function registerGetDocumentOutline(server: McpServer, ctx: AppContext): 
             ? "(no headings detected — read from seq 0 with get_chunk_context)"
             : renderOutline(entries, 0).join("\n");
 
-        return okStructured(`${header}\n\n${body}`, payload);
+        return okStructured(`${redirect}${header}\n\n${body}`, payload);
       } catch (err) {
         return fail(`get_document_outline failed: ${describeError(err)}`);
       }

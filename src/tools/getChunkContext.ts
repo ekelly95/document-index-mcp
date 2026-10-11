@@ -13,6 +13,7 @@ import {
   toChunkRef,
 } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { explainRetiredChunk, explainRetiredDocument } from "./retired.js";
 
 /**
  * The only tool that returns body text, and the reason whole-document dumps
@@ -71,6 +72,13 @@ export function registerGetChunkContext(server: McpServer, ctx: AppContext): voi
           ? byChunkId(ctx.db, args.chunk_id)
           : bySeq(ctx.db, args.document_id!, args.seq!);
         if (!anchor) {
+          // A retired id is explained rather than reported unknown, and never
+          // silently followed: seq numbers can shift between versions, so the
+          // passage at the same seq in the replacement may be a different one.
+          const retired = args.chunk_id
+            ? explainRetiredChunk(ctx.db, args.chunk_id)
+            : explainRetiredDocument(ctx.db, args.document_id!);
+          if (retired) return fail(retired);
           return fail(
             args.chunk_id
               ? `Unknown chunk_id "${args.chunk_id}".`

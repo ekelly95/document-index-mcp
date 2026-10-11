@@ -1,7 +1,7 @@
 import * as z from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import type { AppContext } from "../context.js";
-import { getDocument, listProcessing } from "../db/documentsRepo.js";
+import { listProcessing } from "../db/documentsRepo.js";
 import { assessConfidence, hybridSearch } from "../retrieval/hybrid.js";
 import {
   CHUNK_KINDS,
@@ -13,6 +13,7 @@ import {
   toChunkRef,
 } from "./shapes.js";
 import { describeError, fail, okStructured } from "./result.js";
+import { resolveDocumentId } from "./retired.js";
 
 const inputSchema = z.object({
   query: z.string().min(2),
@@ -117,17 +118,20 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
         }
 
         // A mistyped id is a call that cannot succeed, not a search that found
-        // nothing; "try omitting document_id" sent callers the wrong way.
-        if (args.document_id !== undefined && !getDocument(ctx.db, args.document_id)) {
-          return fail(
-            `Unknown document_id "${args.document_id}". Call get_document_outline with no ` +
-              "arguments to list the library.",
-          );
+        // nothing; "try omitting document_id" sent callers the wrong way. A
+        // retired one is followed to its current version, and the reply says so.
+        let documentId: string | undefined;
+        let redirect: string | null = null;
+        if (args.document_id !== undefined) {
+          const resolved = resolveDocumentId(ctx.db, args.document_id);
+          if (!resolved.ok) return fail(resolved.message);
+          documentId = resolved.id;
+          redirect = resolved.note;
         }
 
         const hits = await hybridSearch(ctx.db, ctx.embedder, {
           query: args.query,
-          ...(args.document_id === undefined ? {} : { documentId: args.document_id }),
+          ...(documentId === undefined ? {} : { documentId }),
           k: args.k,
           mode: args.mode,
           ...(args.filter === undefined
@@ -184,7 +188,8 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
 
         if (payload.hits.length === 0) {
           return okStructured(
-            `No matches for "${args.query}".` +
+            lead(redirect) +
+              `No matches for "${args.query}".` +
               (args.document_id ? " Try omitting document_id to search the whole library." : "") +
               caveat,
             payload,
@@ -197,13 +202,13 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
             (h.similarity === null ? "" : ` (similarity ${h.similarity.toFixed(2)})`) +
             `\n   ${oneLine(h.snippet)}\n   chunk_id: ${h.chunk_id} (seq ${h.seq})`,
         );
-        const lead =
+        const heading =
           payload.confidence === "low"
             ? `Low confidence: no passage is a strong match, so the library probably does not ` +
               `cover "${args.query}". These are the nearest ${payload.hits.length}, not an answer.`
             : `${payload.hits.length} hit(s). Read one with get_chunk_context.`;
         return okStructured(
-          `${lead}\n${QUOTED_CONTENT_NOTE}\n\n${lines.join("\n\n")}${caveat}`,
+          `${lead(redirect)}${heading}\n${QUOTED_CONTENT_NOTE}\n\n${lines.join("\n\n")}${caveat}`,
           payload,
         );
       } catch (err) {
@@ -211,4 +216,9 @@ export function registerSearchDocument(server: McpServer, ctx: AppContext): void
       }
     },
   );
+}
+
+/** A redirect note as a leading paragraph, or nothing. */
+function lead(note: string | null): string {
+  return note === null ? "" : `${note}\n\n`;
 }

@@ -5,6 +5,7 @@ import {
   deleteDocument,
   getDocument,
   ingestLeaseIsLive,
+  retireDocument,
   type DocumentRow,
 } from "../db/documentsRepo.js";
 import { describeError, fail, okStructured } from "./result.js";
@@ -63,7 +64,10 @@ export function registerDeleteDocument(server: McpServer, ctx: AppContext): void
             };
           }
 
-          deleteDocument(ctx.db, doc.id);
+          // Only a ready document's chunks were ever searchable, so only its
+          // chunk_ids can have been cited; those get tombstones.
+          if (doc.ingest_status === "ready") retireDocument(ctx.db, doc.id, null, "deleted");
+          else deleteDocument(ctx.db, doc.id);
           return { ok: true, doc };
         })();
 
