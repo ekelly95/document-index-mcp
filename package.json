@@ -62,7 +62,7 @@
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
   },
   "dependencies": {
-    "@anush008/tokenizers": "0.0.0",
+    "@anush008/tokenizers": "0.6.0",
     "@modelcontextprotocol/server": "^2.3.1",
     "@napi-rs/canvas": "^1.0.10",
     "async-mutex": "^0.5.0",
