@@ -63,7 +63,7 @@
   },
   "dependencies": {
     "@anush008/tokenizers": "0.0.0",
-    "@modelcontextprotocol/server": "^2.3.1",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@napi-rs/canvas": "^1.0.10",
     "async-mutex": "^0.5.0",
     "better-sqlite3": "^13.0.3",
